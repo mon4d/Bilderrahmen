@@ -23,6 +23,7 @@ class Config:
     data_dir: str
     tmp_dir: str
     config_dir: str
+    orientation: str
     log_level: str
 
 
@@ -93,6 +94,7 @@ SMTP_PASS="password-to-your-email-account" # your email account password
     tmp_dir = os.getenv("TMP_DIR", "./tmp")
     config_dir = os.getenv("CONFIG_DIR", "./config")
     log_level = os.getenv("LOG_LEVEL", "INFO")
+    orientation = os.getenv("ORIENTATION", "landscape")
 
     # Create Config instance from the freshly-read environment
     cfg = Config(
@@ -111,6 +113,7 @@ SMTP_PASS="password-to-your-email-account" # your email account password
         data_dir=data_dir,
         tmp_dir=tmp_dir,
         config_dir=config_dir,
+        orientation=orientation,
         log_level=log_level,
     )
 
@@ -140,6 +143,7 @@ SMTP_PASS="password-to-your-email-account" # your email account password
         "DATA_DIR": cfg.data_dir,
         "TMP_DIR": cfg.tmp_dir,
         "CONFIG_DIR": config_dir,
+        "ORIENTATION": cfg.orientation,
         "LOG_LEVEL": cfg.log_level,
     }
 
@@ -160,3 +164,89 @@ SMTP_PASS="password-to-your-email-account" # your email account password
         logger.debug("%s=%s", k, v)
 
     return cfg
+
+
+# Keep track of the env file path that was loaded so callers can persist settings.
+_env_file_path: str | None = None
+
+
+def _get_env_file_path() -> str:
+    """Return the path to the environment/config file (creates default if needed).
+
+    This uses the same discovery order as `load_config` so callers can write
+    back to the same file that was loaded.
+    """
+    global _env_file_path
+    if _env_file_path:
+        return _env_file_path
+
+    config_dir = os.getenv("CONFIG_DIR", "./config")
+    candidates = ["bilderrahmen.config", "bilderrahmen.env", ".env"]
+    for name in candidates:
+        p = os.path.join(config_dir, name)
+        if os.path.exists(p):
+            _env_file_path = p
+            return _env_file_path
+
+    # Not found: create the preferred file
+    p = os.path.join(config_dir, candidates[0])
+    # create with an empty file so callers can append
+    os.makedirs(config_dir, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        f.write("")
+    _env_file_path = p
+    return _env_file_path
+
+
+def read_setting(name: str, default: str | None = None) -> str | None:
+    """Read a single setting from the env/config file. Returns `default` if not present."""
+    path = _get_env_file_path()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if line.startswith(name + "="):
+                    # naive parsing: split at first = and strip quotes
+                    _, rhs = line.split("=", 1)
+                    rhs = rhs.strip()
+                    if rhs.startswith('"') and rhs.endswith('"'):
+                        return rhs[1:-1]
+                    if rhs.startswith("'") and rhs.endswith("'"):
+                        return rhs[1:-1]
+                    return rhs
+    except Exception:
+        pass
+    return default
+
+
+def write_setting(name: str, value: str) -> None:
+    """Write or update a setting in the env/config file. The value is written
+    quoted (double quotes) to be compatible with the default config format.
+    """
+    path = _get_env_file_path()
+    try:
+        lines = []
+        found = False
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+
+        key_prefix = name + "="
+        out_lines = []
+        for line in lines:
+            if line.strip().startswith(name + "="):
+                out_lines.append(f'{name}="{value}"\n')
+                found = True
+            else:
+                out_lines.append(line)
+
+        if not found:
+            out_lines.append(f'{name}="{value}"\n')
+
+        with open(path, "w", encoding="utf-8") as f:
+            f.writelines(out_lines)
+    except Exception:
+        # best-effort: log via print because logging may not be configured
+        print(f"[config] Failed to write setting {name} to {path}")

@@ -2,16 +2,17 @@
 import logging
 import time
 import email
-from config import load_config
+import config
 from storage import UIDStore
 from imap_client import IMAPClientWrapper
 from processor import process_message_bytes
 from smtp_sender import send_reply
 import os
-import subprocess
-import sys
 from PIL import Image
 import tempfile
+import threading
+import glob
+import traceback
 
 
 def init_display(ask_user: bool = False):
@@ -77,7 +78,11 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
         return None
     try:
         image = Image.open(image_path)
-        resizedimage = _resize_and_crop(image, inky.resolution)
+        # If set to portrait mode rotate the image 90 degrees before applying display size
+        orientedImage = image
+        if config.orientation == "portrait":
+            orientedImage = image.rotate(90, expand=True)
+        resizedimage = _resize_and_crop(orientedImage, inky.resolution)
         try:
             inky.set_image(resizedimage, saturation=saturation)
         except TypeError:
@@ -93,10 +98,113 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
                 resizedimage.save(preview_path, format="PNG")
         except Exception:
             logging.exception("Failed to write preview image for %s", image_path)
+        # Track the currently displayed image and its source path so other
+        # parts of the program can rotate/reapply it when orientation changes.
+        try:
+            # store originals (not the resized image) for better-quality rotations
+            global current_image, current_image_path
+            current_image = image.copy()
+            current_image_path = image_path
+        except Exception:
+            logging.debug("Failed to set current_image globals")
         return preview_path
     except Exception:
         logging.exception("Failed to display image %s", image_path)
         return None
+
+
+current_image: Image.Image | None = None
+current_image_path: str | None = None
+
+
+def _find_latest_image(data_dir: str) -> str | None:
+    patterns = ["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.gif"]
+    files = []
+    for pat in patterns:
+        files.extend(glob.glob(os.path.join(data_dir, pat)))
+    if not files:
+        return None
+    files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
+    return files[0]
+
+
+def toggle_orientation_and_apply(inky, cfg):
+    """Toggle orientation setting, persist it, and reapply the current image rotated.
+
+    This writes the new `ORIENTATION` value into the config file and then
+    attempts to rotate the currently displayed image; if none is known it
+    loads the latest image from the data directory and displays that.
+    """
+    try:
+        old = config.read_setting("ORIENTATION", cfg.orientation if hasattr(cfg, "orientation") else "landscape")
+        new = "portrait" if (old or "landscape") == "landscape" else "landscape"
+        config.write_setting("ORIENTATION", new)
+        # update in-memory cfg if present
+        try:
+            cfg.orientation = new
+        except Exception:
+            pass
+        logging.info("Orientation toggled: %s -> %s", old, new)
+
+        # Attempt to rotate the currently loaded image
+        global current_image, current_image_path
+        if current_image is not None:
+            try:
+                show_image_on_display(inky, current_image_path)
+                logging.info("Reapplied current_image after orientation toggle")
+                return
+            except Exception:
+                logging.exception("Failed to rotate/reapply current_image")
+
+        # If we don't have a current image, try to display the most recent one
+        latest = _find_latest_image(cfg.data_dir)
+        if latest:
+            logging.info("No current image available; showing latest: %s", latest)
+            show_image_on_display(inky, latest, tmp_dir=cfg.tmp_dir)
+            logging.info("Applied latest image after orientation toggle")
+            return
+        else:
+            logging.warning("No image available to show after orientation toggle")
+    except Exception:
+        logging.exception("toggle_orientation_and_apply failed: %s", traceback.format_exc())
+
+
+def _monitor_buttons_thread(inky, cfg):
+    try:
+        import gpiod
+        import gpiodevice
+        from gpiod.line import Bias, Direction, Edge
+
+        SW_A = 5
+        SW_B = 6
+        SW_C = 16
+        SW_D = 24
+        BUTTONS = [SW_A, SW_B, SW_C, SW_D]
+        LABELS = ["A", "B", "C", "D"]
+
+        INPUT = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP, edge_detection=Edge.FALLING)
+
+        chip = gpiodevice.find_chip_by_platform()
+        OFFSETS = [chip.line_offset_from_id(id) for id in BUTTONS]
+        line_config = dict.fromkeys(OFFSETS, INPUT)
+        request = chip.request_lines(consumer="bilderrahmen-buttons", config=line_config)
+
+        def handle_button(event):
+            try:
+                index = OFFSETS.index(event.line_offset)
+                label = LABELS[index]
+                logging.info("Button press detected: %s", label)
+                if label == "A":
+                    toggle_orientation_and_apply(inky, cfg)
+            except Exception:
+                logging.exception("Error handling button event")
+
+        while True:
+            for event in request.read_edge_events():
+                handle_button(event)
+            time.sleep(0.01)
+    except Exception:
+        logging.exception("Button monitor thread could not start (gpiod/gpiodevice may be unavailable)")
 
 
 def setup_logging(level: str):
@@ -104,7 +212,7 @@ def setup_logging(level: str):
 
 
 def main():
-    cfg = load_config()
+    cfg = config.load_config()
     setup_logging(cfg.log_level)
 
     os.makedirs(cfg.data_dir, exist_ok=True)
@@ -116,6 +224,13 @@ def main():
     # Initialize the display early so we can update the Inky without having
     # to initialize the IMAP connection first or spawn a separate process.
     inky = init_display(ask_user=False)
+    # Start the button-monitor thread (best-effort: will log if gpiod unavailable)
+    try:
+        t = threading.Thread(target=_monitor_buttons_thread, args=(inky, cfg), daemon=True)
+        t.start()
+        logging.info("Started button monitor thread")
+    except Exception:
+        logging.exception("Failed to start button monitor thread")
 
     imap = IMAPClientWrapper(cfg.imap_host, cfg.imap_port, cfg.imap_user, cfg.imap_pass, cfg.mailbox, cfg.trash)
     if not imap.connect():
