@@ -80,8 +80,11 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
         image = Image.open(image_path)
         # If set to portrait mode rotate the image 90 degrees before applying display size
         orientedImage = image
-        if config.orientation == "portrait":
-            orientedImage = image.rotate(90, expand=True)
+        try:
+            if config.read_setting("ORIENTATION", "landscape") == "portrait":
+                orientedImage = image.rotate(90, expand=True)
+        except Exception:
+            pass
         resizedimage = _resize_and_crop(orientedImage, inky.resolution)
         try:
             inky.set_image(resizedimage, saturation=saturation)
