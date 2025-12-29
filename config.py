@@ -3,30 +3,27 @@ import logging
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
-# Initial load to pick up any .env in CWD; more specific file loaded in load_config
-load_dotenv()
-
 
 @dataclass
 class Config:
-    imap_host: str = os.getenv("IMAP_HOST", "")
-    imap_port: int = int(os.getenv("IMAP_PORT", "993"))
-    imap_user: str = os.getenv("IMAP_USER", "")
-    imap_pass: str = os.getenv("IMAP_PASS", "")
-    mailbox: str = os.getenv("MAILBOX", "INBOX")
-    trash: str = os.getenv("TRASH", "Trash")
+    imap_host: str
+    imap_port: int
+    imap_user: str
+    imap_pass: str
+    mailbox: str
+    trash: str
 
-    smtp_host: str = os.getenv("SMTP_HOST", "")
-    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user: str = os.getenv("SMTP_USER", "")
-    smtp_pass: str = os.getenv("SMTP_PASS", "")
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_pass: str
 
-    poll_interval: int = int(os.getenv("POLL_INTERVAL", "60"))
-    attachment_max_bytes: int = int(os.getenv("ATTACHMENT_MAX_BYTES", "5242880"))
-    data_dir: str = os.getenv("DATA_DIR", "./data")
-    tmp_dir: str = os.getenv("TMP_DIR", "./tmp")
-    config_dir: str = os.getenv("CONFIG_DIR", "./config")
-    log_level: str = os.getenv("LOG_LEVEL", "INFO")
+    poll_interval: int
+    attachment_max_bytes: int
+    data_dir: str
+    tmp_dir: str
+    config_dir: str
+    log_level: str
 
 
 def load_config() -> Config:
@@ -68,11 +65,54 @@ SMTP_PASS="password-to-your-email-account" # your email account password
         with open(env_path, "w", encoding="utf-8") as f:
             f.write(default_env)
 
-    # load the env file we found/created (do not override existing env vars)
+    # load the env file we found/created (override so file values take precedence)
     load_dotenv(dotenv_path=env_path, override=True)
 
-    # Create Config instance from environment
-    cfg = Config()
+    # Read values from the environment now that the file has been loaded
+    def _int_env(name: str, default: int) -> int:
+        try:
+            return int(os.getenv(name, str(default)))
+        except Exception:
+            return default
+
+    imap_host = os.getenv("IMAP_HOST", "")
+    imap_port = _int_env("IMAP_PORT", 993)
+    imap_user = os.getenv("IMAP_USER", "")
+    imap_pass = os.getenv("IMAP_PASS", "")
+    mailbox = os.getenv("MAILBOX", "INBOX")
+    trash = os.getenv("TRASH", "Trash")
+
+    smtp_host = os.getenv("SMTP_HOST", "")
+    smtp_port = _int_env("SMTP_PORT", 587)
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASS", "")
+
+    poll_interval = _int_env("POLL_INTERVAL", 60)
+    attachment_max_bytes = _int_env("ATTACHMENT_MAX_BYTES", 5242880)
+    data_dir = os.getenv("DATA_DIR", "./data")
+    tmp_dir = os.getenv("TMP_DIR", "./tmp")
+    config_dir = os.getenv("CONFIG_DIR", "./config")
+    log_level = os.getenv("LOG_LEVEL", "INFO")
+
+    # Create Config instance from the freshly-read environment
+    cfg = Config(
+        imap_host=imap_host,
+        imap_port=imap_port,
+        imap_user=imap_user,
+        imap_pass=imap_pass,
+        mailbox=mailbox,
+        trash=trash,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_user=smtp_user,
+        smtp_pass=smtp_pass,
+        poll_interval=poll_interval,
+        attachment_max_bytes=attachment_max_bytes,
+        data_dir=data_dir,
+        tmp_dir=tmp_dir,
+        config_dir=config_dir,
+        log_level=log_level,
+    )
 
     # Helper to mask sensitive values for logging
     def _mask_secret(s: str) -> str:
