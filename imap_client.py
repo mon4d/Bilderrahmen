@@ -116,7 +116,7 @@ class IMAPClientWrapper:
             self.client.expunge()
             logger.info("Emptied trash mailbox %s", self.trash_mailbox)
         except Exception:
-            logger.exception("Failed to expunge trash mailbox %s", self.trash_mailbox)
+            logger.warning("Failed to expunge trash mailbox %s", self.trash_mailbox)
         finally:
             try:
                 self.client.select_folder(self.mailbox)
