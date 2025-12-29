@@ -69,7 +69,7 @@ SMTP_PASS="password-to-your-email-account" # your email account password
             f.write(default_env)
 
     # load the env file we found/created (do not override existing env vars)
-    load_dotenv(dotenv_path=env_path, override=False)
+    load_dotenv(dotenv_path=env_path, override=True)
 
     # Create Config instance from environment
     cfg = Config()
