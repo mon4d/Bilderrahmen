@@ -1,7 +1,9 @@
 import os
+import logging
 from dataclasses import dataclass
 from dotenv import load_dotenv
 
+# Initial load to pick up any .env in CWD; more specific file loaded in load_config
 load_dotenv()
 
 
@@ -69,4 +71,52 @@ SMTP_PASS="password-to-your-email-account" # your email account password
     # load the env file we found/created (do not override existing env vars)
     load_dotenv(dotenv_path=env_path, override=False)
 
-    return Config()
+    # Create Config instance from environment
+    cfg = Config()
+
+    # Helper to mask sensitive values for logging
+    def _mask_secret(s: str) -> str:
+        if not s:
+            return "<empty>"
+        if len(s) <= 2:
+            return "*" * len(s)
+        return s[0] + "*" * (len(s) - 2) + s[-1]
+
+    # Prepare a summary of important config keys (mask passwords)
+    summary = {
+        "env_file": env_path,
+        "IMAP_HOST": cfg.imap_host or "<empty>",
+        "IMAP_PORT": cfg.imap_port,
+        "IMAP_USER": cfg.imap_user or "<empty>",
+        "IMAP_PASS": _mask_secret(cfg.imap_pass),
+        "MAILBOX": cfg.mailbox,
+        "TRASH": cfg.trash,
+        "SMTP_HOST": cfg.smtp_host or "<empty>",
+        "SMTP_PORT": cfg.smtp_port,
+        "SMTP_USER": cfg.smtp_user or "<empty>",
+        "SMTP_PASS": _mask_secret(cfg.smtp_pass),
+        "POLL_INTERVAL": cfg.poll_interval,
+        "ATTACHMENT_MAX_BYTES": cfg.attachment_max_bytes,
+        "DATA_DIR": cfg.data_dir,
+        "TMP_DIR": cfg.tmp_dir,
+        "CONFIG_DIR": config_dir,
+        "LOG_LEVEL": cfg.log_level,
+    }
+
+    # Print immediately so it's visible even before logging is configured by caller
+    print(f"[config] Loaded env file: {summary['env_file']}")
+    print("[config] Config summary:")
+    for k, v in summary.items():
+        if k == "env_file":
+            continue
+        print(f"  {k}: {v}")
+
+    # Also emit logging messages (may be visible if caller configures logging early)
+    logger = logging.getLogger(__name__)
+    logger.debug("Config loaded from: %s", summary["env_file"])
+    for k, v in summary.items():
+        if k == "env_file":
+            continue
+        logger.debug("%s=%s", k, v)
+
+    return cfg
