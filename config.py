@@ -88,11 +88,11 @@ SMTP_PASS="password-to-your-email-account" # your email account password
     smtp_user = os.getenv("SMTP_USER", "")
     smtp_pass = os.getenv("SMTP_PASS", "")
 
-    poll_interval = _int_env("POLL_INTERVAL", 60)
+    poll_interval = _int_env("POLL_INTERVAL", 10)
     attachment_max_bytes = _int_env("ATTACHMENT_MAX_BYTES", 5242880)
-    data_dir = os.getenv("DATA_DIR", "./data")
-    tmp_dir = os.getenv("TMP_DIR", "./tmp")
-    config_dir = os.getenv("CONFIG_DIR", "./config")
+    data_dir = os.getenv("DATA_DIR", "/mnt/usb/data")
+    tmp_dir = os.getenv("TMP_DIR", "/mnt/usb/system/tmp")
+    config_dir = os.getenv("CONFIG_DIR", "/mnt/usb")
     log_level = os.getenv("LOG_LEVEL", "INFO")
     orientation = os.getenv("ORIENTATION", "landscape")
 
