@@ -8,7 +8,7 @@ from imap_client import IMAPClientWrapper
 from processor import process_message_bytes
 from smtp_sender import send_reply
 import os
-from PIL import Image
+from PIL import Image, ImageOps
 import tempfile
 import threading
 import glob
@@ -35,6 +35,9 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
     This uses a 'cover' strategy: scale the image so that the smaller
     dimension fits, then crop the excess from the larger dimension.
     """
+    transposedImage = ImageOps.exif_transpose(image)
+    image = transposedImage
+
     target_w, target_h = target_size
     src_w, src_h = image.size
     if src_w == 0 or src_h == 0 or target_w == 0 or target_h == 0:
