@@ -83,7 +83,7 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
         orientedImage = ImageOps.exif_transpose(image)
         try:
             if config.read_setting("ORIENTATION", "landscape") == "portrait":
-                orientedImage = image.rotate(90, expand=True)
+                orientedImage = orientedImage.rotate(90, expand=True)
         except Exception:
             pass
         resizedimage = _resize_and_crop(orientedImage, inky.resolution)
@@ -99,7 +99,10 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
             if tmp_dir:
                 with tempfile.NamedTemporaryFile(prefix="preview-", suffix=".png", dir=tmp_dir, delete=False) as tf:
                     preview_path = tf.name
-                resizedimage.save(preview_path, format="PNG")
+                previewimage = resizedimage
+                if config.read_setting("ORIENTATION", "landscape") == "portrait":
+                    previewimage = previewimage.rotate(-90, expand=True)
+                previewimage.save(preview_path, format="PNG")
         except Exception:
             logging.exception("Failed to write preview image for %s", image_path)
         # Track the currently displayed image and its source path so other
