@@ -243,7 +243,7 @@ def write_setting(name: str, value: str) -> None:
                 out_lines.append(line)
 
         if not found:
-            out_lines.append(f'{name}="{value}"\n')
+            out_lines.append(f'\n\n{name}="{value}"\n')
 
         with open(path, "w", encoding="utf-8") as f:
             f.writelines(out_lines)

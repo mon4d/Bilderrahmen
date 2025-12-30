@@ -35,8 +35,6 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
     This uses a 'cover' strategy: scale the image so that the smaller
     dimension fits, then crop the excess from the larger dimension.
     """
-    transposedImage = ImageOps.exif_transpose(image)
-    image = transposedImage
 
     target_w, target_h = target_size
     src_w, src_h = image.size
@@ -82,7 +80,7 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
     try:
         image = Image.open(image_path)
         # If set to portrait mode rotate the image 90 degrees before applying display size
-        orientedImage = image
+        orientedImage = ImageOps.exif_transpose(image)
         try:
             if config.read_setting("ORIENTATION", "landscape") == "portrait":
                 orientedImage = image.rotate(90, expand=True)
