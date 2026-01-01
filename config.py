@@ -1,5 +1,7 @@
 import os
 import logging
+import tempfile
+import shutil
 
 
 # Default configuration values
@@ -150,7 +152,7 @@ def read_setting(name: str, default: str | None = None) -> str | None:
 
 
 def write_setting(name: str, value: str) -> None:
-    """Write or update a setting in the config file. The value is written
+    """Write or update a setting in the config file atomically. The value is written
     quoted (double quotes) to be compatible with the default config format.
     """
     path = _get_config_file_path()
@@ -172,9 +174,25 @@ def write_setting(name: str, value: str) -> None:
         if not found:
             out_lines.append(f'\n# Added missing setting\n{name}="{value}"\n')
 
-        with open(path, "w", encoding="utf-8") as f:
-            f.writelines(out_lines) # can we make this more robust and atomic?
-    except Exception:
+        # Write to temporary file in same directory (same filesystem for atomic rename)
+        dir_path = os.path.dirname(path)
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', 
+                                         dir=dir_path, delete=False) as tmp:
+            tmp.writelines(out_lines)
+            tmp.flush()
+            os.fsync(tmp.fileno())  # Force write to disk
+            tmp_path = tmp.name
+        
+        # Atomic rename (replaces old file only after new one is fully written, ensuring file integrity)
+        shutil.move(tmp_path, path)
+        
+    except Exception as e:
+        # Clean up temp file if it exists
+        if 'tmp_path' in locals() and os.path.exists(tmp_path):
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
         # best-effort: log via print because logging may not be configured
-        print(f"[config] Failed to write setting {name} to {path}")
+        print(f"[config] Failed to write setting {name} to {path}: {e}")
 

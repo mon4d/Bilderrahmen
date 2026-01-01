@@ -67,17 +67,21 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
     return resized.crop((left, top, right, bottom))
 
 
-def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_dir: str | None = None):
-    """Open `image_path`, resize to the display resolution and show it on `inky`.
-
-    This mirrors the behavior previously in `show_image.py` but runs in-process
-    so updates can happen without spawning a new Python process or re-initializing
-    the display.
+def prepare_image_for_display(inky, image_path: str):
+    """Prepare an image for display: load, orient, resize, and create preview data.
+    
+    Returns a tuple of (prepared_image, preview_data, original_image).
+    The prepared_image is ready to be sent to the display with display_image().
+    The preview_data is PNG bytes ready to be attached to an email.
+    Call this before sending confirmation emails, then call display_image() afterwards.
     """
     if inky is None:
-        logging.warning("No Inky display available; skipping show_image call for %s", image_path)
-        return None
+        logging.warning("No Inky display available; cannot prepare image for %s", image_path)
+        return None, None, None
+    
     try:
+        import io
+        
         image = Image.open(image_path)
         # If set to portrait mode rotate the image 90 degrees before applying display size
         orientedImage = ImageOps.exif_transpose(image)
@@ -87,37 +91,68 @@ def show_image_on_display(inky, image_path: str, saturation: float = 0.5, tmp_di
         except Exception:
             pass
         resizedimage = _resize_and_crop(orientedImage, inky.resolution)
+        
+        # Create preview image data (PNG bytes) to email back - no disk write!
+        preview_data = None
         try:
-            inky.set_image(resizedimage, saturation=saturation)
+            previewimage = resizedimage
+            if config.read_setting("ORIENTATION", "landscape") == "portrait":
+                previewimage = previewimage.rotate(-90, expand=True)
+            
+            # Save to in-memory buffer instead of file
+            buffer = io.BytesIO()
+            previewimage.save(buffer, format="PNG")
+            preview_data = buffer.getvalue()
+            logging.debug("Created preview image data: %d bytes", len(preview_data))
+        except Exception:
+            logging.exception("Failed to create preview image data for %s", image_path)
+        
+        logging.info("Prepared image for display: %s", image_path)
+        return resizedimage, preview_data, image
+    except Exception:
+        logging.exception("Failed to prepare image %s", image_path)
+        return None, None, None
+
+
+        return None, None, None
+
+
+def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image = None, saturation: float = 0.5):
+    """Display a prepared image on the Inky display.
+    
+    Call this after prepare_image_for_display() and after sending confirmation emails.
+    """
+    if inky is None:
+        logging.warning("No Inky display available; skipping display for %s", image_path)
+        return False
+    
+    if prepared_image is None:
+        logging.warning("No prepared image provided; cannot display %s", image_path)
+        return False
+    
+    try:
+        try:
+            inky.set_image(prepared_image, saturation=saturation)
         except TypeError:
-            inky.set_image(resizedimage)
+            inky.set_image(prepared_image)
         inky.show()
         logging.info("Displayed image on Inky: %s", image_path)
-        # Save a preview of what was shown (PNG) so we can email it back
-        preview_path = None
-        try:
-            if tmp_dir:
-                with tempfile.NamedTemporaryFile(prefix="preview-", suffix=".png", dir=tmp_dir, delete=False) as tf:
-                    preview_path = tf.name
-                previewimage = resizedimage
-                if config.read_setting("ORIENTATION", "landscape") == "portrait":
-                    previewimage = previewimage.rotate(-90, expand=True)
-                previewimage.save(preview_path, format="PNG")
-        except Exception:
-            logging.exception("Failed to write preview image for %s", image_path)
+        
         # Track the currently displayed image and its source path so other
         # parts of the program can rotate/reapply it when orientation changes.
         try:
             # store originals (not the resized image) for better-quality rotations
             global current_image, current_image_path
-            current_image = image.copy()
+            if original_image is not None:
+                current_image = original_image.copy()
             current_image_path = image_path
         except Exception:
             logging.debug("Failed to set current_image globals")
-        return preview_path
+        
+        return True
     except Exception:
         logging.exception("Failed to display image %s", image_path)
-        return None
+        return False
 
 
 current_image: Image.Image | None = None
@@ -152,9 +187,11 @@ def toggle_orientation_and_apply(inky):
         global current_image, current_image_path
         if current_image is not None:
             try:
-                show_image_on_display(inky, current_image_path)
-                logging.info("Reapplied current_image after orientation toggle")
-                return
+                prepared, _, orig = prepare_image_for_display(inky, current_image_path)
+                if prepared:
+                    display_image(inky, prepared, current_image_path, orig)
+                    logging.info("Reapplied current_image after orientation toggle")
+                    return
             except Exception:
                 logging.exception("Failed to rotate/reapply current_image")
 
@@ -162,13 +199,11 @@ def toggle_orientation_and_apply(inky):
         latest = _find_latest_image(config.read_setting("DATA_DIR", "/mnt/usb/data"))
         if latest:
             logging.info("No current image available; showing latest: %s", latest)
-            show_image_on_display(
-                inky,
-                latest,
-                tmp_dir=config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
-            )
-            logging.info("Applied latest image after orientation toggle")
-            return
+            prepared, _, orig = prepare_image_for_display(inky, latest)
+            if prepared:
+                display_image(inky, prepared, latest, orig)
+                logging.info("Applied latest image after orientation toggle")
+                return
         else:
             logging.warning("No image available to show after orientation toggle")
     except Exception:
@@ -195,8 +230,20 @@ def _monitor_buttons_thread(inky):
         line_config = dict.fromkeys(OFFSETS, INPUT)
         request = chip.request_lines(consumer="bilderrahmen-buttons", config=line_config)
 
+        last_press_time = 0
+        DEBOUNCE_SECONDS = 15  # Block button presses during roughly the amount of time the display takes to update
+
         def handle_button(event):
+            nonlocal last_press_time
             try:
+                # Check if enough time has passed since last button press
+                now = time.time()
+                if now - last_press_time < DEBOUNCE_SECONDS:
+                    logging.debug("Button press ignored (debounce active, %.1fs remaining)", 
+                                  DEBOUNCE_SECONDS - (now - last_press_time))
+                    return
+                
+                last_press_time = now
                 index = OFFSETS.index(event.line_offset)
                 label = LABELS[index]
                 logging.info("Button press detected: %s", label)
@@ -207,7 +254,7 @@ def _monitor_buttons_thread(inky):
 
         while True:
             for event in request.read_edge_events():
-                handle_button(event) # Does this call multiple times if button held? If yes debounce needed?
+                handle_button(event)
             time.sleep(0.01)
     except Exception:
         logging.exception("Button monitor thread could not start (gpiod/gpiodevice may be unavailable)")
@@ -282,42 +329,45 @@ def main():
                     logging.info("Message UID %s from: %s", uid, from_addr)
 
                     if res.get("ok"):
-                        # Launch the show_image script for the first saved image (non-blocking)
-                        preview_path = None
+                        # Step 1: Prepare the image for display (but don't show it yet)
+                        preview_data = None
+                        prepared_image = None
+                        original_image = None
+                        image_path = None
                         try:
                             paths = res.get("paths", []) or []
                             if paths:
                                 image_path = paths[0]
-                                preview_path = show_image_on_display(
+                                prepared_image, preview_data, original_image = prepare_image_for_display(
                                     inky,
-                                    image_path,
-                                    tmp_dir=config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
+                                    image_path
                                 )
-                                logging.info("Displayed image for UID %s: %s", uid, image_path)
+                                logging.info("Prepared image for UID %s: %s", uid, image_path)
                         except Exception:
-                            logging.exception("Failed to launch show_image for UID %s", uid)
+                            logging.exception("Failed to prepare image for UID %s", uid)
 
-                        # Send success reply and include the preview if available
+                        # Step 2: Send success reply with preview before displaying
                         try:
                             smtp_host = config.read_setting("SMTP_HOST", "")
                             smtp_port = config.read_setting_int("SMTP_PORT", 587)
                             smtp_user = config.read_setting("SMTP_USER", "")
                             smtp_pass = config.read_setting("SMTP_PASS", "")
-                            if preview_path:
-                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.", attachments=[preview_path])
+                            if preview_data:
+                                # Pass in-memory image data as tuple (data, filename, mimetype)
+                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.", attachments=[(preview_data, "preview.png", "image/png")])
                             else:
                                 send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.")
                             logging.info("Sent success reply for UID %s to %s", uid, from_addr)
                         except Exception:
                             logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
                         
-                        # Cleanup: remove the temporary preview file
-                        if preview_path:
-                            try:
-                                os.remove(preview_path)
-                                logging.info("Removed preview file %s after sending reply for UID %s", preview_path, uid)
-                            except Exception:
-                                logging.exception("Failed to remove preview file %s for UID %s", preview_path, uid)
+                        # Step 3: Now display the image on the screen
+                        try:
+                            if prepared_image and image_path:
+                                display_image(inky, prepared_image, image_path, original_image)
+                                logging.info("Displayed image for UID %s: %s", uid, image_path)
+                        except Exception:
+                            logging.exception("Failed to display image for UID %s", uid)
                     else:
                         send_reply(
                             config.read_setting("SMTP_HOST", ""),
