@@ -308,7 +308,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                             html_body=html
                         )
                     else:
-                        html = render_template("email_image_prep_failure.html")
+                        html = render_template("email_image_prep_failure.html", reason=image_preparation_failure_message)
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
                             "Failed to prepare image", image_preparation_failure_message,
                             html_body=html
