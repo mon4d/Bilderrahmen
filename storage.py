@@ -1,4 +1,9 @@
-# Small helpers to persist UID state atomically.
+"""UID persistence storage for Bilderrahmen picture frame.
+
+Provides UIDStore class for atomically saving and loading
+processed email UID state using JSON.
+"""
+# Standard library imports
 import json
 import os
 from typing import Optional

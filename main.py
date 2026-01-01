@@ -1,37 +1,47 @@
-# Orchestrator: poll IMAP, process attachments, and send replies.
-import logging
-import time
+"""Orchestrator for Bilderrahmen picture frame.
+
+Poll IMAP inbox for new messages, process image attachments,
+display on Inky e-paper display, and send email confirmations.
+"""
+# Standard library imports
 import email
+import glob
+import logging
+import os
+import tempfile
+import threading
+import time
+import traceback
+
+# Third-party imports
+from PIL import Image, ImageOps
+
+# Local imports
 import config
-from storage import UIDStore
 from imap_client import IMAPClientWrapper
 from processor import process_message_bytes
 from smtp_sender import send_reply
-import os
-from PIL import Image, ImageOps
-import tempfile
-import threading
-import glob
-import traceback
+from storage import UIDStore
 
 
 def init_display(ask_user: bool = False):
-    # Initialize and return an Inky display instance or None on failure.
+    """Initialize and return an Inky display instance or None on failure."""
     try:
         from inky.auto import auto
 
         inky = auto(ask_user=ask_user, verbose=True)
         logging.info("Initialized Inky display: %s", getattr(inky, "name", "<unknown>"))
         return inky
-    except Exception:
-        logging.exception("Failed to initialize Inky display")
+    except Exception as exc:
+        logging.exception("Failed to initialize Inky display: %s", exc)
         return None
 
 
 def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
-    # Resize `image` to fill `target_size` while preserving aspect ratio,
-    # then center-crop any overflow so the result exactly matches `target_size`.
-
+    """Resize `image` to fill `target_size` while preserving aspect ratio.
+    
+    Center-crop any overflow so the result exactly matches `target_size`.
+    """
     target_w, target_h = target_size
     src_w, src_h = image.size
     if src_w == 0 or src_h == 0 or target_w == 0 or target_h == 0:
@@ -75,39 +85,38 @@ def prepare_image_for_display(inky, image_path: str):
         
         image = Image.open(image_path)
         # If set to portrait mode rotate the image 90 degrees before applying display size
-        orientedImage = ImageOps.exif_transpose(image)
+        oriented_image = ImageOps.exif_transpose(image)
         try:
             if config.read_setting("ORIENTATION", "landscape") == "portrait":
-                orientedImage = orientedImage.rotate(90, expand=True)
-        except Exception:
-            pass
-        resizedimage = _resize_and_crop(orientedImage, inky.resolution)
+                oriented_image = oriented_image.rotate(90, expand=True)
+        except Exception as exc:
+            logging.debug("Failed to apply orientation rotation: %s", exc)
+        resized_image = _resize_and_crop(oriented_image, inky.resolution)
         
         # Create preview image data (PNG bytes) to email back - no disk write!
         preview_data = None
         try:
-            previewimage = resizedimage
+            preview_image = resized_image
             if config.read_setting("ORIENTATION", "landscape") == "portrait":
-                previewimage = previewimage.rotate(-90, expand=True)
+                preview_image = preview_image.rotate(-90, expand=True)
             
             # Save to in-memory buffer instead of file
             buffer = io.BytesIO()
-            previewimage.save(buffer, format="PNG")
+            preview_image.save(buffer, format="PNG")
             preview_data = buffer.getvalue()
             logging.debug("Created preview image data: %d bytes", len(preview_data))
-        except Exception:
-            logging.exception("Failed to create preview image data for %s", image_path)
+        except Exception as exc:
+            logging.exception("Failed to create preview image data for %s: %s", image_path, exc)
         
         logging.info("Prepared image for display: %s", image_path)
-        return resizedimage, preview_data, image
-    except Exception:
-        logging.exception("Failed to prepare image %s", image_path)
+        return resized_image, preview_data, image
+    except Exception as exc:
+        logging.exception("Failed to prepare image %s: %s", image_path, exc)
         return None, None, None
 
 
-def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image = None, saturation: float = 0.5):
-    # Display a prepared image on the Inky display.
-    
+def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image | None = None, saturation: float = 0.5) -> bool:
+    """Display a prepared image on the Inky display."""
     if inky is None:
         logging.warning("No Inky display available; skipping display for %s", image_path)
         return False
@@ -132,12 +141,12 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
             if original_image is not None:
                 current_image = original_image.copy()
             current_image_path = image_path
-        except Exception:
-            logging.debug("Failed to set current_image globals")
+        except Exception as exc:
+            logging.debug("Failed to set current_image globals: %s", exc)
         
         return True
-    except Exception:
-        logging.exception("Failed to display image %s", image_path)
+    except Exception as exc:
+        logging.exception("Failed to display image %s: %s", image_path, exc)
         return False
 
 
@@ -156,9 +165,8 @@ def _find_latest_image(data_dir: str) -> str | None:
     return files[0]
 
 
-def toggle_orientation_and_apply(inky):
-    # Toggle orientation setting and reapply the current image rotated.
-    
+def toggle_orientation_and_apply(inky) -> None:
+    """Toggle orientation setting and reapply the current image rotated."""
     try:
         old = config.read_setting("ORIENTATION", "landscape")
         new = "portrait" if (old or "landscape") == "landscape" else "landscape"
@@ -174,8 +182,8 @@ def toggle_orientation_and_apply(inky):
                     display_image(inky, prepared, current_image_path, orig)
                     logging.info("Reapplied current_image after orientation toggle")
                     return
-            except Exception:
-                logging.exception("Failed to rotate/reapply current_image")
+            except Exception as exc:
+                logging.exception("Failed to rotate/reapply current_image: %s", exc)
 
         # If we don't have a current image, try to display the most recent one
         latest = _find_latest_image(config.read_setting("DATA_DIR", "/mnt/usb/data"))
@@ -188,11 +196,11 @@ def toggle_orientation_and_apply(inky):
                 return
         else:
             logging.warning("No image available to show after orientation toggle")
-    except Exception:
-        logging.exception("toggle_orientation_and_apply failed: %s", traceback.format_exc())
+    except Exception as exc:
+        logging.exception("toggle_orientation_and_apply failed: %s", exc)
 
 
-def _monitor_buttons_thread(inky):
+def _monitor_buttons_thread(inky) -> None:
     try:
         import gpiod
         import gpiodevice
@@ -231,23 +239,23 @@ def _monitor_buttons_thread(inky):
                 logging.info("Button press detected: %s", label)
                 if label == "A":
                     toggle_orientation_and_apply(inky)
-            except Exception:
-                logging.exception("Error handling button event")
+            except Exception as exc:
+                logging.exception("Error handling button event: %s", exc)
 
         while True:
             for event in request.read_edge_events():
                 handle_button(event)
             time.sleep(0.01)
-    except Exception:
-        logging.exception("Button monitor thread could not start (gpiod/gpiodevice may be unavailable)")
+    except Exception as exc:
+        logging.exception("Button monitor thread could not start (gpiod/gpiodevice may be unavailable): %s", exc)
 
 
-def setup_logging(level: str):
+def setup_logging(level: str) -> None:
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
 
 
-def process_uids(uids, last_uid, imap, inky, store):
-    # Process a list of message UIDs: fetch, process attachments, send replies, and display images.
+def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, store: UIDStore) -> int:
+    """Process a list of message UIDs: fetch, process attachments, send replies, and display images."""
     for uid in sorted(uids):
         if uid <= last_uid:
             continue
@@ -341,7 +349,7 @@ def process_uids(uids, last_uid, imap, inky, store):
     return last_uid
 
 
-def main():
+def main() -> None:
     config.load_config()
     setup_logging(config.read_setting("LOG_LEVEL", "INFO"))
 

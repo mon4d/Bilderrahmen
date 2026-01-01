@@ -1,24 +1,38 @@
-# Simple SMTP sender using smtplib to send confirmation/error replies.
+"""Simple SMTP sender for confirmation and error emails.
+
+Provides send_reply function for sending emails with optional
+file or in-memory attachments.
+"""
+# Standard library imports
 import logging
+import mimetypes
 import os
-from email.message import EmailMessage
 import smtplib
+from email.message import EmailMessage
 
 logger = logging.getLogger(__name__)
 
 
 def send_reply(smtp_host: str, smtp_port: int, smtp_user: str, smtp_pass: str, to_addr: str, subject: str, body: str, attachments: list[str | tuple] | None = None) -> None:
-    # Send a reply email. Optionally attach files or in-memory data from `attachments`.
+    """Send a reply email with optional file or in-memory attachments.
 
-    # `attachments` can be:
-    # - A list of filesystem paths (str): Files will be read and attached
-    # - A list of tuples (data: bytes, filename: str, mimetype: str): In-memory data will be attached
-    # - A mix of both
+    Args:
+        smtp_host: SMTP server hostname
+        smtp_port: SMTP server port
+        smtp_user: SMTP username
+        smtp_pass: SMTP password
+        to_addr: Recipient email address
+        subject: Email subject line
+        body: Email body text
+        attachments: Optional list of file paths (str) or tuples (data, filename, mimetype)
     
-    # For in-memory data, pass a tuple of (data, filename, mimetype).
-    # Example: [(image_bytes, "preview.png", "image/png")]
+    attachments can be:
+    - A list of filesystem paths (str): Files will be read and attached
+    - A list of tuples (data: bytes, filename: str, mimetype: str): In-memory data will be attached
+    - A mix of both
     
-    import mimetypes
+    Example: [(image_bytes, "preview.png", "image/png")]
+    """
 
     msg = EmailMessage()
     msg["From"] = smtp_user

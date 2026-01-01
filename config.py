@@ -1,6 +1,13 @@
+"""Configuration management for Bilderrahmen picture frame.
+
+Provides functions to load, read, and write configuration settings
+with file-based storage and atomic writes.
+"""
+# Standard library imports
+import logging
 import os
-import tempfile
 import shutil
+import tempfile
 
 # Default configuration values
 DEFAULTS_IMAP = {
@@ -59,7 +66,7 @@ template += "\n".join(f"{key}=\"{value}\"" for key, value in DEFAULTS_DEVELOPMEN
 template += "\n"
 
 def _get_config_file_path() -> str:
-    # Return the path to the config file (creates directory if needed).
+    """Return the path to the config file (creates directory if needed)."""
     global _config_file_path
     if _config_file_path:
         return _config_file_path
@@ -70,10 +77,11 @@ def _get_config_file_path() -> str:
 
 
 def load_config() -> None:
-    # Initialize config file with all default values for any missing keys.
-    # Creates the config file if it doesn't exist, and ensures all keys from
-    # DEFAULTS are present in the file. Prints a summary of loaded configuration.
-
+    """Initialize config file with all default values for any missing keys.
+    
+    Creates the config file if it doesn't exist, and ensures all keys from
+    DEFAULTS are present in the file. Prints a summary of loaded configuration.
+    """
     path = _get_config_file_path()
     
     # Create config file with comprehensive template if it doesn't exist
@@ -91,8 +99,8 @@ def load_config() -> None:
                 if line and not line.startswith("#") and "=" in line:
                     key = line.split("=", 1)[0].strip()
                     existing_keys.add(key)
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.warning("Failed to read existing config keys: %s", exc)
     
     # Write any missing keys with their default values
     for key, default_value in DEFAULTS.items():
@@ -117,7 +125,7 @@ def load_config() -> None:
 
 
 def read_setting_int(name: str, default: int) -> int:
-    # Read a setting as an integer. Returns default if not present or invalid.
+    """Read a setting as an integer. Returns default if not present or invalid."""
     value = read_setting(name, str(default))
     try:
         return int(value) if value else default
@@ -126,7 +134,7 @@ def read_setting_int(name: str, default: int) -> int:
 
 
 def read_setting(name: str, default: str | None = None) -> str | None:
-    # Read a single setting from the config file. Returns `default` if not present.
+    """Read a single setting from the config file. Returns `default` if not present."""
     path = _get_config_file_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -143,14 +151,17 @@ def read_setting(name: str, default: str | None = None) -> str | None:
                     if rhs.startswith("'") and rhs.endswith("'"):
                         return rhs[1:-1]
                     return rhs
-    except Exception:
-        pass
+    except Exception as exc:
+        logging.debug("Failed to read setting %s: %s", name, exc)
     return default
 
 
 def write_setting(name: str, value: str) -> None:
-    # Write or update a setting in the config file atomically. The value is written
-    # quoted (double quotes) to be compatible with the default config format.
+    """Write or update a setting in the config file atomically.
+    
+    The value is written quoted (double quotes) to be compatible
+    with the default config format.
+    """
     path = _get_config_file_path()
     try:
         lines = []
@@ -187,8 +198,8 @@ def write_setting(name: str, value: str) -> None:
         if 'tmp_path' in locals() and os.path.exists(tmp_path):
             try:
                 os.unlink(tmp_path)
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.debug("Failed to clean up temp file %s: %s", tmp_path, exc)
         # best-effort: log via print because logging may not be configured
         print(f"[config] Failed to write setting {name} to {path}: {e}")
 
