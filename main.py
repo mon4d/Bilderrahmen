@@ -90,8 +90,19 @@ def prepare_image_for_display(inky, image_path: str):
         import io
         
         image = Image.open(image_path)
+        
+        # Apply EXIF orientation with validation
+        try:
+            oriented_image = ImageOps.exif_transpose(image)
+            # Validate that transpose didn't produce invalid dimensions
+            if oriented_image.size[0] == 0 or oriented_image.size[1] == 0:
+                logging.warning("EXIF transpose produced invalid dimensions, using original image")
+                oriented_image = image
+        except Exception as exc:
+            logging.warning("EXIF transpose failed: %s, using original image", exc)
+            oriented_image = image
+        
         # If set to portrait mode rotate the image 90 degrees before applying display size
-        oriented_image = ImageOps.exif_transpose(image)
         try:
             if config.read_setting("ORIENTATION", "landscape") == "portrait":
                 oriented_image = oriented_image.rotate(90, expand=True)
@@ -350,7 +361,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
                 except Exception:
                     logging.exception("Failed to send error reply for UID %s", uid)
-                
+
             # Cleanup
             try:
                 imap.delete_message(uid)
