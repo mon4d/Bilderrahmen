@@ -293,6 +293,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
             smtp_port = config.read_setting_int("SMTP_PORT", 587)
             smtp_user = config.read_setting("SMTP_USER", "")
             smtp_pass = config.read_setting("SMTP_PASS", "")
+            device_name = config.read_setting("DEVICE_NAME", "Mein Bilderrahmen")
 
             res = process_message_bytes(
                 raw,
@@ -325,16 +326,16 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 try:
                     if preview_data:
                         # Pass in-memory image data as tuple (data, filename, mimetype)
-                        html = render_template("email_success_with_preview.html", image_cid="preview_image")
+                        html = render_template("email_success_with_preview.html", image_cid="preview_image", device_name=device_name)
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                            "Image received", "Your image was received and stored.",
+                            f"{device_name}: Image received", "Your image was received and stored.",
                             attachments=[(preview_data, "preview.png", "image/png")],
                             html_body=html
                         )
                     else:
-                        html = render_template("email_image_prep_failure.html", reason=image_preparation_failure_message)
+                        html = render_template("email_image_prep_failure.html", reason=image_preparation_failure_message, device_name=device_name)
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                            "Failed to prepare image", image_preparation_failure_message,
+                            f"{device_name}: Failed to prepare image", image_preparation_failure_message,
                             html_body=html
                         )
                     logging.info("Sent success reply for UID %s to %s", uid, from_addr)
@@ -352,9 +353,9 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 try:
                     error_code = res.get('reason')
                     error_message = get_user_friendly_error(error_code)
-                    html = render_template("email_failure.html", error_message=error_message)
+                    html = render_template("email_failure.html", error_message=error_message, device_name=device_name)
                     send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                        "Image processing failed",
+                        f"{device_name}: Image processing failed",
                         f"Reason: {error_message}",
                         html_body=html
                     )

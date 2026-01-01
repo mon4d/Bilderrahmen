@@ -31,6 +31,7 @@ DEFAULTS_APPLICATION = {
     "POLL_INTERVAL": "60",
     "ATTACHMENT_MAX_BYTES": "20971520",
     "ORIENTATION": "landscape",
+    "DEVICE_NAME": "Mein Bilderrahmen",
 }
 DEFAULTS_DEVELOPMENT = {
     # Development settings
