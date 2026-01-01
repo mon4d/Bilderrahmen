@@ -296,8 +296,13 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 except Exception:
                     image_preparation_failure_message = f"Failed to prepare image for UID {uid} with exception:\n{traceback.format_exc()}"
                     logging.exception(image_preparation_failure_message)
+                
+                # Check if preparation failed silently (no exception but no preview either)
+                if paths and preview_data is None and not image_preparation_failure_message:
+                    image_preparation_failure_message = "Failed to prepare image for display. The image may be too large, corrupted, or in an unsupported format."
+                    logging.warning("Image preparation failed silently for UID %s: %s", uid, image_path)
 
-                # Step 2: Send success reply with preview before displaying
+                # Step 2: Send success/failure reply with preview before displaying
                 try:
                     if preview_data:
                         # Pass in-memory image data as tuple (data, filename, mimetype)
