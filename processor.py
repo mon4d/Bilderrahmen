@@ -1,4 +1,4 @@
-"""Message processing: extract attachments, validate images, and store safely."""
+# Message processing: extract attachments, validate images, and store safely.
 import os
 import tempfile
 import logging
@@ -26,7 +26,6 @@ def save_attachment_bytes(data: bytes, tmp_dir: str, filename: str) -> str:
 
 
 def validate_and_sanitize_image(path: str) -> bool:
-    # Content sniff
     mime = magic.from_file(path, mime=True)
     if not _is_image_mime(mime):
         logger.warning("Attachment %s is not image mime: %s", path, mime)

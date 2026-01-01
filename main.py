@@ -1,4 +1,4 @@
-"""Orchestrator: poll IMAP, process attachments, and send replies."""
+# Orchestrator: poll IMAP, process attachments, and send replies.
 import logging
 import time
 import email
@@ -16,7 +16,7 @@ import traceback
 
 
 def init_display(ask_user: bool = False):
-    """Initialize and return an Inky display instance or None on failure."""
+    # Initialize and return an Inky display instance or None on failure.
     try:
         from inky.auto import auto
 
@@ -29,12 +29,8 @@ def init_display(ask_user: bool = False):
 
 
 def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
-    """Resize `image` to fill `target_size` while preserving aspect ratio,
-    then center-crop any overflow so the result exactly matches `target_size`.
-
-    This uses a 'cover' strategy: scale the image so that the smaller
-    dimension fits, then crop the excess from the larger dimension.
-    """
+    # Resize `image` to fill `target_size` while preserving aspect ratio,
+    # then center-crop any overflow so the result exactly matches `target_size`.
 
     target_w, target_h = target_size
     src_w, src_h = image.size
@@ -68,13 +64,8 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
 
 
 def prepare_image_for_display(inky, image_path: str):
-    """Prepare an image for display: load, orient, resize, and create preview data.
+    # Prepare an image for display: load, orient, resize, and create preview data.
     
-    Returns a tuple of (prepared_image, preview_data, original_image).
-    The prepared_image is ready to be sent to the display with display_image().
-    The preview_data is PNG bytes ready to be attached to an email.
-    Call this before sending confirmation emails, then call display_image() afterwards.
-    """
     if inky is None:
         logging.warning("No Inky display available; cannot prepare image for %s", image_path)
         return None, None, None
@@ -118,10 +109,8 @@ def prepare_image_for_display(inky, image_path: str):
 
 
 def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image = None, saturation: float = 0.5):
-    """Display a prepared image on the Inky display.
+    # Display a prepared image on the Inky display.
     
-    Call this after prepare_image_for_display() and after sending confirmation emails.
-    """
     if inky is None:
         logging.warning("No Inky display available; skipping display for %s", image_path)
         return False
@@ -171,12 +160,8 @@ def _find_latest_image(data_dir: str) -> str | None:
 
 
 def toggle_orientation_and_apply(inky):
-    """Toggle orientation setting, persist it, and reapply the current image rotated.
-
-    This writes the new `ORIENTATION` value into the config file and then
-    attempts to rotate the currently displayed image; if none is known it
-    loads the latest image from the data directory and displays that.
-    """
+    # Toggle orientation setting, persist it, and reapply the current image rotated.
+    
     try:
         old = config.read_setting("ORIENTATION", "landscape")
         new = "portrait" if (old or "landscape") == "landscape" else "landscape"
@@ -292,7 +277,7 @@ def main():
         config.read_setting_int("IMAP_PORT", 993),
         config.read_setting("IMAP_USER", ""),
         config.read_setting("IMAP_PASS", ""),
-        config.read_setting("MAILBOX", "INBOX"),
+        config.read_setting("MAILBOX", "Inbox"),
         config.read_setting("TRASH", "Trash")
     )
     if not imap.connect():
@@ -321,12 +306,18 @@ def main():
                         raw,
                         config.read_setting("TMP_DIR", "/mnt/usb/system/tmp"),
                         config.read_setting("DATA_DIR", "/mnt/usb/data"),
-                        config.read_setting_int("ATTACHMENT_MAX_BYTES", 5242880)
+                        config.read_setting_int("ATTACHMENT_MAX_BYTES", 20971520)
                     )
                     logging.info("Processing result for UID %s: %s", uid, res)
 
                     from_addr = email.message_from_bytes(raw).get('From')
                     logging.info("Message UID %s from: %s", uid, from_addr)
+
+                    # Read SMTP configuration
+                    smtp_host = config.read_setting("SMTP_HOST", "")
+                    smtp_port = config.read_setting_int("SMTP_PORT", 587)
+                    smtp_user = config.read_setting("SMTP_USER", "")
+                    smtp_pass = config.read_setting("SMTP_PASS", "")
 
                     if res.get("ok"):
                         # Step 1: Prepare the image for display (but don't show it yet)
@@ -348,15 +339,16 @@ def main():
 
                         # Step 2: Send success reply with preview before displaying
                         try:
-                            smtp_host = config.read_setting("SMTP_HOST", "")
-                            smtp_port = config.read_setting_int("SMTP_PORT", 587)
-                            smtp_user = config.read_setting("SMTP_USER", "")
-                            smtp_pass = config.read_setting("SMTP_PASS", "")
                             if preview_data:
                                 # Pass in-memory image data as tuple (data, filename, mimetype)
-                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.", attachments=[(preview_data, "preview.png", "image/png")])
+                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
+                                    "Image received", "Your image was received and stored.",
+                                    attachments=[(preview_data, "preview.png", "image/png")]
+                                )
                             else:
-                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.")
+                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
+                                    "Image received", "Your image was received and stored."
+                                )
                             logging.info("Sent success reply for UID %s to %s", uid, from_addr)
                         except Exception:
                             logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
@@ -369,12 +361,7 @@ def main():
                         except Exception:
                             logging.exception("Failed to display image for UID %s", uid)
                     else:
-                        send_reply(
-                            config.read_setting("SMTP_HOST", ""),
-                            config.read_setting_int("SMTP_PORT", 587),
-                            config.read_setting("SMTP_USER", ""),
-                            config.read_setting("SMTP_PASS", ""),
-                            from_addr,
+                        send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
                             "Image processing failed",
                             f"Reason: {res.get('reason')}"
                         )

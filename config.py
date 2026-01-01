@@ -1,31 +1,39 @@
 import os
-import logging
 import tempfile
 import shutil
 
-
 # Default configuration values
-DEFAULTS = {
+DEFAULTS_IMAP = {
     # IMAP settings
     "IMAP_HOST": "",
     "IMAP_PORT": "993",
     "IMAP_USER": "",
     "IMAP_PASS": "",
-    "MAILBOX": "INBOX",
+    "MAILBOX": "Inbox",
     "TRASH": "Trash",
+}
+DEFAULTS_SMTP = {
     # SMTP settings
     "SMTP_HOST": "",
     "SMTP_PORT": "587",
     "SMTP_USER": "",
     "SMTP_PASS": "",
+}
+DEFAULTS_APPLICATION = {
     # Application settings
     "POLL_INTERVAL": "10",
-    "ATTACHMENT_MAX_BYTES": "5242880",
+    "ATTACHMENT_MAX_BYTES": "20971520",
+    "ORIENTATION": "landscape",
+}
+DEFAULTS_DEVELOPMENT = {
+    # Development settings
     "DATA_DIR": "/mnt/usb/data",
     "TMP_DIR": "/mnt/usb/system/tmp",
-    "ORIENTATION": "landscape",
     "LOG_LEVEL": "INFO",
 }
+
+# Combine all defaults into a single dictionary
+DEFAULTS = {**DEFAULTS_IMAP, **DEFAULTS_SMTP, **DEFAULTS_APPLICATION, **DEFAULTS_DEVELOPMENT}
 
 # Config directory is hardcoded to /mnt/usb
 CONFIG_DIR = "/mnt/usb"
@@ -34,9 +42,24 @@ CONFIG_FILE = "bilderrahmen.config"
 # Keep track of the config file path
 _config_file_path: str | None = None
 
+# Template for new config files with descriptions
+template = "\n# Bilderrahmen Configuration File\n"
+template += "\n"
+template += "\n# IMAP settings (for receiving emails with images) - Check your email provider's documentation for these values\n"
+template += "\n".join(f"{key}=\"{value}\"" for key, value in DEFAULTS_IMAP.items())
+template += "\n"
+template += "\n# SMTP settings (for sending confirmation/error emails) - Check your email provider's documentation for these values\n"
+template += "\n".join(f"{key}=\"{value}\"" for key, value in DEFAULTS_SMTP.items())
+template += "\n"
+template += "\n# Application settings - tweak these to customize the frame behavior\n"
+template += "\n".join(f"{key}=\"{value}\"" for key, value in DEFAULTS_APPLICATION.items())
+template += "\n"
+template += "\n# Development settings - only change if you know what you're doing\n"
+template += "\n".join(f"{key}=\"{value}\"" for key, value in DEFAULTS_DEVELOPMENT.items())
+template += "\n"
 
 def _get_config_file_path() -> str:
-    """Return the path to the config file (creates directory if needed)."""
+    # Return the path to the config file (creates directory if needed).
     global _config_file_path
     if _config_file_path:
         return _config_file_path
@@ -47,40 +70,14 @@ def _get_config_file_path() -> str:
 
 
 def load_config() -> None:
-    """Initialize config file with all default values for any missing keys.
-    
-    Creates the config file if it doesn't exist, and ensures all keys from
-    DEFAULTS are present in the file. Prints a summary of loaded configuration.
-    """
+    # Initialize config file with all default values for any missing keys.
+    # Creates the config file if it doesn't exist, and ensures all keys from
+    # DEFAULTS are present in the file. Prints a summary of loaded configuration.
+
     path = _get_config_file_path()
     
     # Create config file with comprehensive template if it doesn't exist
     if not os.path.exists(path):
-        template = """# Bilderrahmen Configuration File
-# Edit the values below according to your email provider settings
-
-# IMAP settings (for receiving emails with images)
-IMAP_HOST="" # e.g., "imap.gmail.com" or "imap.your-provider.com"
-IMAP_PORT="993" # Usually 993 for IMAP over SSL
-IMAP_USER="" # Your full email address
-IMAP_PASS="" # Your email password or app-specific password
-MAILBOX="INBOX" # Mailbox folder name (check your provider's folder names)
-TRASH="Trash" # Trash folder name (check your provider's folder names)
-
-# SMTP settings (for sending confirmation/error emails)
-SMTP_HOST="" # e.g., "smtp.gmail.com" or "smtp.your-provider.com"
-SMTP_PORT="587" # Usually 587 for SMTP with STARTTLS
-SMTP_USER="" # Your full email address
-SMTP_PASS="" # Your email password or app-specific password
-
-# Application settings
-POLL_INTERVAL="10" # How often to check for new emails (seconds)
-ATTACHMENT_MAX_BYTES="5242880" # Maximum attachment size: 5MB
-DATA_DIR="/mnt/usb/data" # Directory for storing data
-TMP_DIR="/mnt/usb/system/tmp" # Directory for temporary files
-ORIENTATION="landscape" # Display orientation: "landscape" or "portrait"
-LOG_LEVEL="INFO" # Logging level: DEBUG, INFO, WARNING, ERROR
-"""
         with open(path, "w", encoding="utf-8") as f:
             f.write(template)
         print(f"[config] Created new config file: {path}")
@@ -120,7 +117,7 @@ LOG_LEVEL="INFO" # Logging level: DEBUG, INFO, WARNING, ERROR
 
 
 def read_setting_int(name: str, default: int) -> int:
-    """Read a setting as an integer. Returns default if not present or invalid."""
+    # Read a setting as an integer. Returns default if not present or invalid.
     value = read_setting(name, str(default))
     try:
         return int(value) if value else default
@@ -129,7 +126,7 @@ def read_setting_int(name: str, default: int) -> int:
 
 
 def read_setting(name: str, default: str | None = None) -> str | None:
-    """Read a single setting from the config file. Returns `default` if not present."""
+    # Read a single setting from the config file. Returns `default` if not present.
     path = _get_config_file_path()
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -152,9 +149,8 @@ def read_setting(name: str, default: str | None = None) -> str | None:
 
 
 def write_setting(name: str, value: str) -> None:
-    """Write or update a setting in the config file atomically. The value is written
-    quoted (double quotes) to be compatible with the default config format.
-    """
+    # Write or update a setting in the config file atomically. The value is written
+    # quoted (double quotes) to be compatible with the default config format.
     path = _get_config_file_path()
     try:
         lines = []

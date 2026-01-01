@@ -1,4 +1,4 @@
-"""Small helpers to persist UID state atomically."""
+# Small helpers to persist UID state atomically.
 import json
 import os
 from typing import Optional

@@ -1,4 +1,4 @@
-"""Simple SMTP sender using smtplib to send confirmation/error replies."""
+# Simple SMTP sender using smtplib to send confirmation/error replies.
 import logging
 import os
 from email.message import EmailMessage
@@ -8,16 +8,16 @@ logger = logging.getLogger(__name__)
 
 
 def send_reply(smtp_host: str, smtp_port: int, smtp_user: str, smtp_pass: str, to_addr: str, subject: str, body: str, attachments: list[str | tuple] | None = None) -> None:
-    """Send a reply email. Optionally attach files or in-memory data from `attachments`.
+    # Send a reply email. Optionally attach files or in-memory data from `attachments`.
 
-    `attachments` can be:
-    - A list of filesystem paths (str): Files will be read and attached
-    - A list of tuples (data: bytes, filename: str, mimetype: str): In-memory data will be attached
-    - A mix of both
+    # `attachments` can be:
+    # - A list of filesystem paths (str): Files will be read and attached
+    # - A list of tuples (data: bytes, filename: str, mimetype: str): In-memory data will be attached
+    # - A mix of both
     
-    For in-memory data, pass a tuple of (data, filename, mimetype).
-    Example: [(image_bytes, "preview.png", "image/png")]
-    """
+    # For in-memory data, pass a tuple of (data, filename, mimetype).
+    # Example: [(image_bytes, "preview.png", "image/png")]
+    
     import mimetypes
 
     msg = EmailMessage()

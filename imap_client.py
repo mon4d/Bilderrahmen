@@ -1,4 +1,4 @@
-"""Simple IMAP client wrapper using imapclient for polling UNSEEN messages."""
+# Simple IMAP client wrapper using imapclient for polling messages.
 from typing import List, Optional
 import logging
 import sys
@@ -69,7 +69,7 @@ class IMAPClientWrapper:
         # intentionally retrieve every message rather than only UNSEEN.
         if not self.client:
             if not self.connect():
-                logger.error("search_unseen_uids: not connected to IMAP")
+                logger.error("get_all_messages_uids: not connected to IMAP")
                 return []
         # Using UID search ensures stability; use 'ALL' to match every message
         try:
