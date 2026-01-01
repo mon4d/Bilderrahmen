@@ -286,6 +286,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 prepared_image = None
                 original_image = None
                 image_path = None
+                image_preparation_failure_message = ""
                 try:
                     paths = res.get("paths", []) or []
                     if paths:
@@ -293,7 +294,8 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                         prepared_image, preview_data, original_image = prepare_image_for_display(inky, image_path)
                         logging.info("Prepared image for UID %s: %s", uid, image_path)
                 except Exception:
-                    logging.exception("Failed to prepare image for UID %s", uid)
+                    image_preparation_failure_message = f"Failed to prepare image for UID {uid} with exception:\n{traceback.format_exc()}"
+                    logging.exception(image_preparation_failure_message)
 
                 # Step 2: Send success reply with preview before displaying
                 try:
@@ -306,9 +308,9 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                             html_body=html
                         )
                     else:
-                        html = render_template("email_success.html")
+                        html = render_template("email_image_prep_failure.html")
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                            "Image received", "Your image was received and stored.",
+                            "Failed to prepare image", image_preparation_failure_message,
                             html_body=html
                         )
                     logging.info("Sent success reply for UID %s to %s", uid, from_addr)
