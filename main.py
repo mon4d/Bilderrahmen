@@ -74,11 +74,17 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
 
 
 def prepare_image_for_display(inky, image_path: str):
-    # Prepare an image for display: load, orient, resize, and create preview data.
+    """Prepare an image for display: load, orient, resize, and create preview data.
     
+    Returns:
+        Tuple of (resized_image, preview_data, original_image, error_message)
+        On success: (Image, bytes, Image, None)
+        On failure: (None, None, None, error_string)
+    """
     if inky is None:
-        logging.warning("No Inky display available; cannot prepare image for %s", image_path)
-        return None, None, None
+        error_msg = "No Inky display available; cannot prepare image"
+        logging.warning("%s for %s", error_msg, image_path)
+        return None, None, None, error_msg
     
     try:
         import io
@@ -109,10 +115,11 @@ def prepare_image_for_display(inky, image_path: str):
             logging.exception("Failed to create preview image data for %s: %s", image_path, exc)
         
         logging.info("Prepared image for display: %s", image_path)
-        return resized_image, preview_data, image
+        return resized_image, preview_data, image, None
     except Exception as exc:
+        error_msg = f"Failed to prepare image: {type(exc).__name__}: {str(exc)}"
         logging.exception("Failed to prepare image %s: %s", image_path, exc)
-        return None, None, None
+        return None, None, None, error_msg
 
 
 def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image | None = None, saturation: float = 0.5) -> bool:
@@ -177,11 +184,13 @@ def toggle_orientation_and_apply(inky) -> None:
         global current_image, current_image_path
         if current_image is not None:
             try:
-                prepared, _, orig = prepare_image_for_display(inky, current_image_path)
+                prepared, _, orig, error = prepare_image_for_display(inky, current_image_path)
                 if prepared:
                     display_image(inky, prepared, current_image_path, orig)
                     logging.info("Reapplied current_image after orientation toggle")
                     return
+                elif error:
+                    logging.error("Failed to prepare current image: %s", error)
             except Exception as exc:
                 logging.exception("Failed to rotate/reapply current_image: %s", exc)
 
@@ -189,11 +198,13 @@ def toggle_orientation_and_apply(inky) -> None:
         latest = _find_latest_image(config.read_setting("DATA_DIR", "/mnt/usb/data"))
         if latest:
             logging.info("No current image available; showing latest: %s", latest)
-            prepared, _, orig = prepare_image_for_display(inky, latest)
+            prepared, _, orig, error = prepare_image_for_display(inky, latest)
             if prepared:
                 display_image(inky, prepared, latest, orig)
                 logging.info("Applied latest image after orientation toggle")
                 return
+            elif error:
+                logging.error("Failed to prepare latest image: %s", error)
         else:
             logging.warning("No image available to show after orientation toggle")
     except Exception as exc:
@@ -291,16 +302,13 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     paths = res.get("paths", []) or []
                     if paths:
                         image_path = paths[0]
-                        prepared_image, preview_data, original_image = prepare_image_for_display(inky, image_path)
+                        prepared_image, preview_data, original_image, prep_error = prepare_image_for_display(inky, image_path)
+                        if prep_error:
+                            image_preparation_failure_message = prep_error
                         logging.info("Prepared image for UID %s: %s", uid, image_path)
                 except Exception:
                     image_preparation_failure_message = f"Failed to prepare image for UID {uid} with exception:\n{traceback.format_exc()}"
                     logging.exception(image_preparation_failure_message)
-                
-                # Check if preparation failed silently (no exception but no preview either)
-                if paths and preview_data is None and not image_preparation_failure_message:
-                    image_preparation_failure_message = "Failed to prepare image for display. The image may be too large, corrupted, or in an unsupported format."
-                    logging.warning("Image preparation failed silently for UID %s: %s", uid, image_path)
 
                 # Step 2: Send success/failure reply with preview before displaying
                 try:
@@ -342,7 +350,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
                 except Exception:
                     logging.exception("Failed to send error reply for UID %s", uid)
-
+                
             # Cleanup
             try:
                 imap.delete_message(uid)
