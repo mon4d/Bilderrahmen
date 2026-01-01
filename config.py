@@ -21,7 +21,7 @@ DEFAULTS_SMTP = {
 }
 DEFAULTS_APPLICATION = {
     # Application settings
-    "POLL_INTERVAL": "10",
+    "POLL_INTERVAL": "60",
     "ATTACHMENT_MAX_BYTES": "20971520",
     "ORIENTATION": "landscape",
 }

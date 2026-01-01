@@ -105,9 +105,6 @@ def prepare_image_for_display(inky, image_path: str):
         return None, None, None
 
 
-        return None, None, None
-
-
 def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image = None, saturation: float = 0.5):
     # Display a prepared image on the Inky display.
     
@@ -160,7 +157,7 @@ def _find_latest_image(data_dir: str) -> str | None:
 
 
 def toggle_orientation_and_apply(inky):
-    # Toggle orientation setting, persist it, and reapply the current image rotated.
+    # Toggle orientation setting and reapply the current image rotated.
     
     try:
         old = config.read_setting("ORIENTATION", "landscape")
@@ -216,7 +213,7 @@ def _monitor_buttons_thread(inky):
         request = chip.request_lines(consumer="bilderrahmen-buttons", config=line_config)
 
         last_press_time = 0
-        DEBOUNCE_SECONDS = 15  # Block button presses during roughly the amount of time the display takes to update
+        DEBOUNCE_SECONDS = 15  # Block button presses for roughly the amount of time the display takes to update
 
         def handle_button(event):
             nonlocal last_press_time
@@ -249,6 +246,101 @@ def setup_logging(level: str):
     logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
 
 
+def process_uids(uids, last_uid, imap, inky, store):
+    # Process a list of message UIDs: fetch, process attachments, send replies, and display images.
+    for uid in sorted(uids):
+        if uid <= last_uid:
+            continue
+        try:
+            raw = imap.fetch_message_bytes(uid)
+            logging.info("Fetched UID %s (%d bytes)", uid, len(raw) if raw is not None else 0)
+
+            from_addr = email.message_from_bytes(raw).get('From')
+            logging.info("Message UID %s from: %s", uid, from_addr)
+
+            # Read SMTP configuration
+            smtp_host = config.read_setting("SMTP_HOST", "")
+            smtp_port = config.read_setting_int("SMTP_PORT", 587)
+            smtp_user = config.read_setting("SMTP_USER", "")
+            smtp_pass = config.read_setting("SMTP_PASS", "")
+
+            res = process_message_bytes(
+                raw,
+                config.read_setting("TMP_DIR", "/mnt/usb/system/tmp"),
+                config.read_setting("DATA_DIR", "/mnt/usb/data"),
+                config.read_setting_int("ATTACHMENT_MAX_BYTES", 20971520)
+            )
+            logging.info("Processing result for UID %s: %s", uid, res)
+
+            if res.get("ok"):
+                # Step 1: Prepare the image for display (but don't show it yet)
+                preview_data = None
+                prepared_image = None
+                original_image = None
+                image_path = None
+                try:
+                    paths = res.get("paths", []) or []
+                    if paths:
+                        image_path = paths[0]
+                        prepared_image, preview_data, original_image = prepare_image_for_display(inky, image_path)
+                        logging.info("Prepared image for UID %s: %s", uid, image_path)
+                except Exception:
+                    logging.exception("Failed to prepare image for UID %s", uid)
+
+                # Step 2: Send success reply with preview before displaying
+                try:
+                    if preview_data:
+                        # Pass in-memory image data as tuple (data, filename, mimetype)
+                        send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
+                            "Image received", "Your image was received and stored.",
+                            attachments=[(preview_data, "preview.png", "image/png")]
+                        )
+                    else:
+                        send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
+                            "Image received", "Your image was received and stored."
+                        )
+                    logging.info("Sent success reply for UID %s to %s", uid, from_addr)
+                except Exception:
+                    logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
+                
+                # Step 3: Now display the image on the screen
+                try:
+                    if prepared_image and image_path:
+                        display_image(inky, prepared_image, image_path, original_image)
+                        logging.info("Displayed image for UID %s: %s", uid, image_path)
+                except Exception:
+                    logging.exception("Failed to display image for UID %s", uid)
+            else:
+                try:
+                    send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
+                        "Image processing failed",
+                        f"Reason: {res.get('reason')}"
+                    )
+                    logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
+                except Exception:
+                    logging.exception("Failed to send error reply for UID %s", uid)
+
+            # Cleanup
+            try:
+                imap.delete_message(uid)
+                logging.info("Deleted UID %s from mailbox", uid)
+            except Exception:
+                logging.exception("Failed to delete UID %s", uid)
+
+            try:
+                imap.empty_trash()
+                logging.info("Emptied trash mailbox '%s'", config.read_setting("TRASH", "Trash"))
+            except Exception:
+                logging.warning("Failed to empty trash after deleting UID %s", uid)
+
+            last_uid = max(last_uid, uid)
+            store.set_last_uid(last_uid)
+        except Exception:
+            logging.exception("Failed to process UID %s", uid)
+    
+    return last_uid
+
+
 def main():
     config.load_config()
     setup_logging(config.read_setting("LOG_LEVEL", "INFO"))
@@ -261,9 +353,8 @@ def main():
     store = UIDStore(os.path.join(data_dir, "uid_state.json"))
     last_uid = store.get_last_uid() or 0
 
-    # Initialize the display early so we can update the Inky without having
-    # to initialize the IMAP connection first or spawn a separate process.
     inky = init_display(ask_user=False)
+
     # Start the button-monitor thread (best-effort: will log if gpiod unavailable)
     try:
         t = threading.Thread(target=_monitor_buttons_thread, args=(inky,), daemon=True)
@@ -278,112 +369,50 @@ def main():
         config.read_setting("IMAP_USER", ""),
         config.read_setting("IMAP_PASS", ""),
         config.read_setting("MAILBOX", "Inbox"),
-        config.read_setting("TRASH", "Trash")
+        config.read_setting("TRASH", "Trash"),
     )
     if not imap.connect():
         logging.exception("Failed to connect to IMAP server; aborting") # We might want to show an error on the display here
         return
 
     try:
+        # Check for any existing messages first
+        try:
+            uids = imap.get_all_messages_uids()
+            logging.info("Found %d unprocessed messages on startup", len(uids))
+        except Exception as exc:
+            logging.exception("IMAP search failed: %s", exc)
+            uids = []
+        
+        # Process existing messages
+        last_uid = process_uids(uids, last_uid, imap, inky, store)
+        
+        # Main loop: wait for new messages using IDLE
         while True:
-            time.sleep(config.read_setting_int("POLL_INTERVAL", 10))
             try:
+                # Wait for new mail notification (15 minute timeout)
+                has_new_mail = imap.idle_wait(timeout=900)
+                
+                if not has_new_mail:
+                    # Timeout reached - check for new mails manually once, then restart IDLE to keep connection alive
+                    logging.debug("IDLE timeout, restarting...")
+                
+                # New mail arrived - fetch and process
+                logging.info("New mail notification received")
                 uids = imap.get_all_messages_uids()
-                # Might make sense to use a push notification mechanism instead of polling
-                logging.info("Found %d unprocessed messages", len(uids))
+                logging.info("Found %d messages after IDLE notification", len(uids))
             except Exception as exc:
-                logging.exception("IMAP search failed: %s", exc)
-                continue
-
-            for uid in sorted(uids):
-                if uid <= last_uid:
-                    continue
+                logging.exception("IDLE/search failed: %s", exc)
+                # Fall back to polling on error
+                time.sleep(config.read_setting_int("POLL_INTERVAL", 60))
                 try:
-                    raw = imap.fetch_message_bytes(uid)
-                    logging.info("Fetched UID %s (%d bytes)", uid, len(raw) if raw is not None else 0)
-
-                    res = process_message_bytes(
-                        raw,
-                        config.read_setting("TMP_DIR", "/mnt/usb/system/tmp"),
-                        config.read_setting("DATA_DIR", "/mnt/usb/data"),
-                        config.read_setting_int("ATTACHMENT_MAX_BYTES", 20971520)
-                    )
-                    logging.info("Processing result for UID %s: %s", uid, res)
-
-                    from_addr = email.message_from_bytes(raw).get('From')
-                    logging.info("Message UID %s from: %s", uid, from_addr)
-
-                    # Read SMTP configuration
-                    smtp_host = config.read_setting("SMTP_HOST", "")
-                    smtp_port = config.read_setting_int("SMTP_PORT", 587)
-                    smtp_user = config.read_setting("SMTP_USER", "")
-                    smtp_pass = config.read_setting("SMTP_PASS", "")
-
-                    if res.get("ok"):
-                        # Step 1: Prepare the image for display (but don't show it yet)
-                        preview_data = None
-                        prepared_image = None
-                        original_image = None
-                        image_path = None
-                        try:
-                            paths = res.get("paths", []) or []
-                            if paths:
-                                image_path = paths[0]
-                                prepared_image, preview_data, original_image = prepare_image_for_display(
-                                    inky,
-                                    image_path
-                                )
-                                logging.info("Prepared image for UID %s: %s", uid, image_path)
-                        except Exception:
-                            logging.exception("Failed to prepare image for UID %s", uid)
-
-                        # Step 2: Send success reply with preview before displaying
-                        try:
-                            if preview_data:
-                                # Pass in-memory image data as tuple (data, filename, mimetype)
-                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                                    "Image received", "Your image was received and stored.",
-                                    attachments=[(preview_data, "preview.png", "image/png")]
-                                )
-                            else:
-                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                                    "Image received", "Your image was received and stored."
-                                )
-                            logging.info("Sent success reply for UID %s to %s", uid, from_addr)
-                        except Exception:
-                            logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
-                        
-                        # Step 3: Now display the image on the screen
-                        try:
-                            if prepared_image and image_path:
-                                display_image(inky, prepared_image, image_path, original_image)
-                                logging.info("Displayed image for UID %s: %s", uid, image_path)
-                        except Exception:
-                            logging.exception("Failed to display image for UID %s", uid)
-                    else:
-                        send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                            "Image processing failed",
-                            f"Reason: {res.get('reason')}"
-                        )
-                        logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
-
-                    # delete message after processing
-                    try:
-                        imap.delete_message(uid)
-                        logging.info("Deleted UID %s from mailbox", uid)
-                    except Exception:
-                        logging.exception("Failed to delete UID %s", uid)
-
-                    try:
-                        imap.empty_trash()
-                        logging.info("Emptied trash mailbox '%s'", config.read_setting("TRASH", "Trash"))
-                    except Exception:
-                        logging.warning("Failed to empty trash after deleting UID %s", uid)
-
-                    last_uid = max(last_uid, uid)
-                    store.set_last_uid(last_uid)
+                    uids = imap.get_all_messages_uids()
                 except Exception:
-                    logging.exception("Failed to process UID %s", uid)
+                    logging.exception("Fallback search also failed")
+                    continue
+
+            # Process new messages
+            last_uid = process_uids(uids, last_uid, imap, inky, store)
 
     finally:
         imap.logout()

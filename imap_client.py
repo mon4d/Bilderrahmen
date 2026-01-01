@@ -123,3 +123,43 @@ class IMAPClientWrapper:
             except Exception:
                 # best-effort restore
                 pass
+
+    def idle_wait(self, timeout: int = 900) -> bool:
+        # Wait for new messages using IMAP IDLE. Returns True if new mail arrived.
+        # Timeout should be < 29 minutes (1740s) as servers disconnect after 30min.
+        # Default is 15 minutes (900s).
+        if not self.client:
+            if not self.connect():
+                logger.error("idle_wait: not connected to IMAP")
+                return False
+        
+        try:
+            # Check if server supports IDLE
+            if b'IDLE' not in self.client.capabilities():
+                logger.warning("IMAP server does not support IDLE extension")
+                return False
+            
+            logger.debug("Starting IDLE, waiting for new messages (timeout: %ds)...", timeout)
+            self.client.idle()
+            
+            # Wait for notification or timeout
+            responses = self.client.idle_check(timeout=timeout)
+            self.client.idle_done()
+            
+            # Check if any response indicates new mail
+            for response in responses:
+                if b'EXISTS' in response or b'RECENT' in response:
+                    logger.info("IDLE notification: new mail arrived")
+                    return True
+            
+            logger.debug("IDLE timeout reached, no new mail")
+            return False
+            
+        except Exception as e:
+            logger.exception("IDLE failed: %s", e)
+            # Try to clean up IDLE state
+            try:
+                self.client.idle_done()
+            except Exception:
+                pass
+            return False
