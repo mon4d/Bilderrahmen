@@ -135,7 +135,7 @@ def _find_latest_image(data_dir: str) -> str | None:
     return files[0]
 
 
-def toggle_orientation_and_apply(inky, cfg):
+def toggle_orientation_and_apply(inky):
     """Toggle orientation setting, persist it, and reapply the current image rotated.
 
     This writes the new `ORIENTATION` value into the config file and then
@@ -143,14 +143,9 @@ def toggle_orientation_and_apply(inky, cfg):
     loads the latest image from the data directory and displays that.
     """
     try:
-        old = config.read_setting("ORIENTATION", cfg.orientation if hasattr(cfg, "orientation") else "landscape")
+        old = config.read_setting("ORIENTATION", "landscape")
         new = "portrait" if (old or "landscape") == "landscape" else "landscape"
         config.write_setting("ORIENTATION", new)
-        # update in-memory cfg if present
-        try:
-            cfg.orientation = new
-        except Exception:
-            pass
         logging.info("Orientation toggled: %s -> %s", old, new)
 
         # Attempt to rotate the currently loaded image
@@ -164,10 +159,14 @@ def toggle_orientation_and_apply(inky, cfg):
                 logging.exception("Failed to rotate/reapply current_image")
 
         # If we don't have a current image, try to display the most recent one
-        latest = _find_latest_image(cfg.data_dir)
+        latest = _find_latest_image(config.read_setting("DATA_DIR", "/mnt/usb/data"))
         if latest:
             logging.info("No current image available; showing latest: %s", latest)
-            show_image_on_display(inky, latest, tmp_dir=cfg.tmp_dir)
+            show_image_on_display(
+                inky,
+                latest,
+                tmp_dir=config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
+            )
             logging.info("Applied latest image after orientation toggle")
             return
         else:
@@ -176,7 +175,7 @@ def toggle_orientation_and_apply(inky, cfg):
         logging.exception("toggle_orientation_and_apply failed: %s", traceback.format_exc())
 
 
-def _monitor_buttons_thread(inky, cfg):
+def _monitor_buttons_thread(inky):
     try:
         import gpiod
         import gpiodevice
@@ -202,13 +201,13 @@ def _monitor_buttons_thread(inky, cfg):
                 label = LABELS[index]
                 logging.info("Button press detected: %s", label)
                 if label == "A":
-                    toggle_orientation_and_apply(inky, cfg)
+                    toggle_orientation_and_apply(inky)
             except Exception:
                 logging.exception("Error handling button event")
 
         while True:
             for event in request.read_edge_events():
-                handle_button(event)
+                handle_button(event) # Does this call multiple times if button held? If yes debounce needed?
             time.sleep(0.01)
     except Exception:
         logging.exception("Button monitor thread could not start (gpiod/gpiodevice may be unavailable)")
@@ -219,13 +218,15 @@ def setup_logging(level: str):
 
 
 def main():
-    cfg = config.load_config()
-    setup_logging(cfg.log_level)
+    config.load_config()
+    setup_logging(config.read_setting("LOG_LEVEL", "INFO"))
 
-    os.makedirs(cfg.data_dir, exist_ok=True)
-    os.makedirs(cfg.tmp_dir, exist_ok=True)
+    data_dir = config.read_setting("DATA_DIR", "/mnt/usb/data")
+    tmp_dir = config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(tmp_dir, exist_ok=True)
 
-    store = UIDStore(os.path.join(cfg.data_dir, "uid_state.json"))
+    store = UIDStore(os.path.join(data_dir, "uid_state.json"))
     last_uid = store.get_last_uid() or 0
 
     # Initialize the display early so we can update the Inky without having
@@ -233,25 +234,33 @@ def main():
     inky = init_display(ask_user=False)
     # Start the button-monitor thread (best-effort: will log if gpiod unavailable)
     try:
-        t = threading.Thread(target=_monitor_buttons_thread, args=(inky, cfg), daemon=True)
+        t = threading.Thread(target=_monitor_buttons_thread, args=(inky,), daemon=True)
         t.start()
         logging.info("Started button monitor thread")
     except Exception:
         logging.exception("Failed to start button monitor thread")
 
-    imap = IMAPClientWrapper(cfg.imap_host, cfg.imap_port, cfg.imap_user, cfg.imap_pass, cfg.mailbox, cfg.trash)
+    imap = IMAPClientWrapper(
+        config.read_setting("IMAP_HOST", ""),
+        config.read_setting_int("IMAP_PORT", 993),
+        config.read_setting("IMAP_USER", ""),
+        config.read_setting("IMAP_PASS", ""),
+        config.read_setting("MAILBOX", "INBOX"),
+        config.read_setting("TRASH", "Trash")
+    )
     if not imap.connect():
-        logging.exception("Failed to connect to IMAP server; aborting")
+        logging.exception("Failed to connect to IMAP server; aborting") # We might want to show an error on the display here
         return
 
     try:
         while True:
+            time.sleep(config.read_setting_int("POLL_INTERVAL", 10))
             try:
                 uids = imap.get_all_messages_uids()
+                # Might make sense to use a push notification mechanism instead of polling
                 logging.info("Found %d unprocessed messages", len(uids))
             except Exception as exc:
                 logging.exception("IMAP search failed: %s", exc)
-                time.sleep(cfg.poll_interval)
                 continue
 
             for uid in sorted(uids):
@@ -261,7 +270,12 @@ def main():
                     raw = imap.fetch_message_bytes(uid)
                     logging.info("Fetched UID %s (%d bytes)", uid, len(raw) if raw is not None else 0)
 
-                    res = process_message_bytes(raw, cfg.tmp_dir, cfg.data_dir, cfg.attachment_max_bytes)
+                    res = process_message_bytes(
+                        raw,
+                        config.read_setting("TMP_DIR", "/mnt/usb/system/tmp"),
+                        config.read_setting("DATA_DIR", "/mnt/usb/data"),
+                        config.read_setting_int("ATTACHMENT_MAX_BYTES", 5242880)
+                    )
                     logging.info("Processing result for UID %s: %s", uid, res)
 
                     from_addr = email.message_from_bytes(raw).get('From')
@@ -274,17 +288,25 @@ def main():
                             paths = res.get("paths", []) or []
                             if paths:
                                 image_path = paths[0]
-                                preview_path = show_image_on_display(inky, image_path, tmp_dir=cfg.tmp_dir)
+                                preview_path = show_image_on_display(
+                                    inky,
+                                    image_path,
+                                    tmp_dir=config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
+                                )
                                 logging.info("Displayed image for UID %s: %s", uid, image_path)
                         except Exception:
                             logging.exception("Failed to launch show_image for UID %s", uid)
 
                         # Send success reply and include the preview if available
                         try:
+                            smtp_host = config.read_setting("SMTP_HOST", "")
+                            smtp_port = config.read_setting_int("SMTP_PORT", 587)
+                            smtp_user = config.read_setting("SMTP_USER", "")
+                            smtp_pass = config.read_setting("SMTP_PASS", "")
                             if preview_path:
-                                send_reply(cfg.smtp_host, cfg.smtp_port, cfg.smtp_user, cfg.smtp_pass, from_addr, "Image received", "Your image was received and stored.", attachments=[preview_path])
+                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.", attachments=[preview_path])
                             else:
-                                send_reply(cfg.smtp_host, cfg.smtp_port, cfg.smtp_user, cfg.smtp_pass, from_addr, "Image received", "Your image was received and stored.")
+                                send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr, "Image received", "Your image was received and stored.")
                             logging.info("Sent success reply for UID %s to %s", uid, from_addr)
                         except Exception:
                             logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
@@ -297,7 +319,15 @@ def main():
                             except Exception:
                                 logging.exception("Failed to remove preview file %s for UID %s", preview_path, uid)
                     else:
-                        send_reply(cfg.smtp_host, cfg.smtp_port, cfg.smtp_user, cfg.smtp_pass, from_addr, "Image processing failed", f"Reason: {res.get('reason')}")
+                        send_reply(
+                            config.read_setting("SMTP_HOST", ""),
+                            config.read_setting_int("SMTP_PORT", 587),
+                            config.read_setting("SMTP_USER", ""),
+                            config.read_setting("SMTP_PASS", ""),
+                            from_addr,
+                            "Image processing failed",
+                            f"Reason: {res.get('reason')}"
+                        )
                         logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
 
                     # delete message after processing
@@ -309,7 +339,7 @@ def main():
 
                     try:
                         imap.empty_trash()
-                        logging.info("Emptied trash mailbox '%s'", getattr(cfg, 'trash', None))
+                        logging.info("Emptied trash mailbox '%s'", config.read_setting("TRASH", "Trash"))
                     except Exception:
                         logging.warning("Failed to empty trash after deleting UID %s", uid)
 
@@ -318,7 +348,6 @@ def main():
                 except Exception:
                     logging.exception("Failed to process UID %s", uid)
 
-            time.sleep(cfg.poll_interval)
     finally:
         imap.logout()
 
