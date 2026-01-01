@@ -20,7 +20,7 @@ from PIL import Image, ImageOps
 import config
 from imap_client import IMAPClientWrapper
 from processor import process_message_bytes
-from smtp_sender import send_reply
+from smtp_sender import send_reply, render_template, get_user_friendly_error
 from storage import UIDStore
 
 
@@ -299,13 +299,17 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 try:
                     if preview_data:
                         # Pass in-memory image data as tuple (data, filename, mimetype)
+                        html = render_template("email_success_with_preview.html", image_cid="preview_image")
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
                             "Image received", "Your image was received and stored.",
-                            attachments=[(preview_data, "preview.png", "image/png")]
+                            attachments=[(preview_data, "preview.png", "image/png")],
+                            html_body=html
                         )
                     else:
+                        html = render_template("email_success.html")
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
-                            "Image received", "Your image was received and stored."
+                            "Image received", "Your image was received and stored.",
+                            html_body=html
                         )
                     logging.info("Sent success reply for UID %s to %s", uid, from_addr)
                 except Exception:
@@ -320,9 +324,13 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     logging.exception("Failed to display image for UID %s", uid)
             else:
                 try:
+                    error_code = res.get('reason')
+                    error_message = get_user_friendly_error(error_code)
+                    html = render_template("email_failure.html", error_message=error_message)
                     send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
                         "Image processing failed",
-                        f"Reason: {res.get('reason')}"
+                        f"Reason: {error_message}",
+                        html_body=html
                     )
                     logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
                 except Exception:
