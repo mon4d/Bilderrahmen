@@ -77,30 +77,37 @@ def prepare_image_for_display(inky, image_path: str):
     """Prepare an image for display: load, orient, resize, and create preview data.
     
     Returns:
-        Tuple of (resized_image, preview_data, original_image, error_message)
-        On success: (Image, bytes, Image, None)
-        On failure: (None, None, None, error_string)
+        Tuple of (resized_image, preview_data, original_image, error_message, warnings_list)
+        On success: (Image, bytes, Image, None, [warnings])
+        On failure: (None, None, None, error_string, [])
     """
     if inky is None:
         error_msg = "No Inky display available; cannot prepare image"
         logging.warning("%s for %s", error_msg, image_path)
-        return None, None, None, error_msg
+        return None, None, None, error_msg, []
     
     try:
         import io
         
+        warnings_list = []
         image = Image.open(image_path)
         
         # Apply EXIF orientation with validation
+        exif_failed = False
         try:
             oriented_image = ImageOps.exif_transpose(image)
             # Validate that transpose didn't produce invalid dimensions
             if oriented_image.size[0] == 0 or oriented_image.size[1] == 0:
                 logging.warning("EXIF transpose produced invalid dimensions, using original image")
                 oriented_image = image
+                exif_failed = True
         except Exception as exc:
             logging.warning("EXIF transpose failed: %s, using original image", exc)
             oriented_image = image
+            exif_failed = True
+        
+        if exif_failed:
+            warnings_list.append("EXIF orientation data could not be applied. Please check the preview to verify your image displays correctly.")
         
         # If set to portrait mode rotate the image 90 degrees before applying display size
         try:
@@ -126,11 +133,11 @@ def prepare_image_for_display(inky, image_path: str):
             logging.exception("Failed to create preview image data for %s: %s", image_path, exc)
         
         logging.info("Prepared image for display: %s", image_path)
-        return resized_image, preview_data, image, None
+        return resized_image, preview_data, image, None, warnings_list
     except Exception as exc:
         error_msg = f"Failed to prepare image: {type(exc).__name__}: {str(exc)}"
         logging.exception("Failed to prepare image %s: %s", image_path, exc)
-        return None, None, None, error_msg
+        return None, None, None, error_msg, []
 
 
 def display_image(inky, prepared_image: Image.Image, image_path: str, original_image: Image.Image | None = None, saturation: float = 0.5) -> bool:
@@ -195,7 +202,7 @@ def toggle_orientation_and_apply(inky) -> None:
         global current_image, current_image_path
         if current_image is not None:
             try:
-                prepared, _, orig, error = prepare_image_for_display(inky, current_image_path)
+                prepared, _, orig, error, _ = prepare_image_for_display(inky, current_image_path)
                 if prepared:
                     display_image(inky, prepared, current_image_path, orig)
                     logging.info("Reapplied current_image after orientation toggle")
@@ -209,7 +216,7 @@ def toggle_orientation_and_apply(inky) -> None:
         latest = _find_latest_image(config.read_setting("DATA_DIR", "/mnt/usb/data"))
         if latest:
             logging.info("No current image available; showing latest: %s", latest)
-            prepared, _, orig, error = prepare_image_for_display(inky, latest)
+            prepared, _, orig, error, _ = prepare_image_for_display(inky, latest)
             if prepared:
                 display_image(inky, prepared, latest, orig)
                 logging.info("Applied latest image after orientation toggle")
@@ -310,11 +317,12 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 original_image = None
                 image_path = None
                 image_preparation_failure_message = ""
+                warnings = []
                 try:
                     paths = res.get("paths", []) or []
                     if paths:
                         image_path = paths[0]
-                        prepared_image, preview_data, original_image, prep_error = prepare_image_for_display(inky, image_path)
+                        prepared_image, preview_data, original_image, prep_error, warnings = prepare_image_for_display(inky, image_path)
                         if prep_error:
                             image_preparation_failure_message = prep_error
                         logging.info("Prepared image for UID %s: %s", uid, image_path)
@@ -325,8 +333,19 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 # Step 2: Send success/failure reply with preview before displaying
                 try:
                     if preview_data:
+                        # Build warning HTML if there are warnings
+                        warning_html = ""
+                        if warnings:
+                            warning_items = "".join([f"<li>{w}</li>" for w in warnings])
+                            warning_html = f'''<div class="warning-box">
+                                    <p><strong>⚠️ Notice:</strong></p>
+                                    <ul>
+                                        {warning_items}
+                                    </ul>
+                                </div>'''
+                        
                         # Pass in-memory image data as tuple (data, filename, mimetype)
-                        html = render_template("email_success_with_preview.html", image_cid="preview_image", device_name=device_name)
+                        html = render_template("email_success_with_preview.html", image_cid="preview_image", device_name=device_name, warning_html=warning_html)
                         send_reply(smtp_host, smtp_port, smtp_user, smtp_pass, from_addr,
                             f"{device_name}: Image received", "Your image was received and stored.",
                             attachments=[(preview_data, "preview.png", "image/png")],
