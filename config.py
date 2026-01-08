@@ -38,6 +38,8 @@ DEFAULTS_DEVELOPMENT = {
     "DATA_DIR": "/mnt/usb/data",
     "TMP_DIR": "/mnt/usb/system/tmp",
     "LOG_LEVEL": "INFO",
+    "LOG_TO_FILE": "none",
+    "LOG_DIR": "/mnt/usb/system/logs",
 }
 
 # Combine all defaults into a single dictionary

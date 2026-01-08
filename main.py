@@ -7,6 +7,7 @@ display on Inky e-paper display, and send email confirmations.
 import email
 import glob
 import logging
+from logging.handlers import TimedRotatingFileHandler
 import os
 import tempfile
 import threading
@@ -280,7 +281,48 @@ def _monitor_buttons_thread(inky) -> None:
 
 
 def setup_logging(level: str) -> None:
-    logging.basicConfig(level=getattr(logging, level.upper(), logging.INFO), format="%(asctime)s %(levelname)s %(message)s")
+    """Configure logging with console and optional file output.
+    
+    Enables file logging when LOG_TO_FILE config is set to "true".
+    Creates rotating daily log files in LOG_DIR directory.
+    """
+    log_level = getattr(logging, level.upper(), logging.INFO)
+    log_format = '%(asctime)s %(levelname)s [%(name)s] %(message)s'
+    
+    # Create root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(log_level)
+    
+    # Create console handler
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(log_level)
+    console_handler.setFormatter(logging.Formatter(log_format))
+    root_logger.addHandler(console_handler)
+    
+    # Check if file logging is enabled
+    log_to_file = config.read_setting("LOG_TO_FILE", "none")
+    if log_to_file == "true":
+        try:
+            log_dir = config.read_setting("LOG_DIR", "/mnt/usb/system/logs")
+            os.makedirs(log_dir, exist_ok=True)
+            
+            log_file_path = os.path.join(log_dir, "bilderrahmen.log")
+            
+            # Create file handler with daily rotation
+            file_handler = TimedRotatingFileHandler(
+                filename=log_file_path,
+                when='midnight',
+                interval=1,
+                backupCount=3,
+                encoding='utf-8'
+            )
+            file_handler.setLevel(log_level)
+            file_handler.setFormatter(logging.Formatter(log_format))
+            root_logger.addHandler(file_handler)
+            
+            logging.info("File logging enabled: %s", log_file_path)
+        except Exception as exc:
+            logging.warning("Failed to enable file logging: %s", exc)
 
 
 def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, store: UIDStore) -> int:
