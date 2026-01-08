@@ -30,8 +30,15 @@ def init_display(ask_user: bool = False):
     try:
         from inky.auto import auto
 
-        inky = auto(ask_user=ask_user, verbose=True)
-        logging.info("Initialized Inky display: %s", getattr(inky, "name", "<unknown>"))
+        inky = auto()
+        display_name = getattr(inky, "name", "<unknown>")
+        logging.info("Initialized Inky display: %s", display_name)
+        
+        # Reject displays that failed to initialize properly
+        if display_name == "<unknown>":
+            logging.error("Display initialization failed - name is '<unknown>'. Hardware may not be properly connected or detected.")
+            return None
+        
         return inky
     except Exception as exc:
         logging.exception("Failed to initialize Inky display: %s", exc)
@@ -454,15 +461,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 except Exception:
                     logging.exception("Failed to send error reply for UID %s", uid)
 
-            # Step 3: Now display the image on the screen
-            try:
-                if prepared_image and image_path:
-                    display_image(inky, prepared_image, image_path, original_image)
-                    logging.info("Displayed image for UID %s: %s", uid, image_path)
-            except Exception:
-                logging.exception("Failed to display image for UID %s", uid)
-
-            # Cleanup
+            # Step 3: Cleanup
             try:
                 imap.delete_message(uid)
                 logging.info("Deleted UID %s from mailbox", uid)
@@ -474,6 +473,14 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                 logging.info("Emptied trash mailbox '%s'", config.read_setting("TRASH", "Trash"))
             except Exception:
                 logging.warning("Failed to empty trash after deleting UID %s", uid)
+
+            # Step 4: Now display the image on the screen
+            try:
+                if prepared_image and image_path:
+                    display_image(inky, prepared_image, image_path, original_image)
+                    logging.info("Displayed image for UID %s: %s", uid, image_path)
+            except Exception:
+                logging.exception("Failed to display image for UID %s", uid)
 
             last_uid = max(last_uid, uid)
             store.set_last_uid(last_uid)
