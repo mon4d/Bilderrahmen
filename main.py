@@ -151,12 +151,48 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
         logging.warning("No prepared image provided; cannot display %s", image_path)
         return False
     
+    # Log detailed inky display state for crash diagnosis
+    logging.info("Inky display diagnostics - name: %s, resolution: %s, type: %s", 
+                 getattr(inky, "name", "<unknown>"),
+                 getattr(inky, "resolution", "<no resolution>"),
+                 type(inky).__name__)
+    
+    # Log additional inky properties that might indicate initialization issues
+    try:
+        logging.info("Inky display extended properties - width: %s, height: %s, colour: %s, border: %s",
+                     getattr(inky, "width", "<no width>"),
+                     getattr(inky, "height", "<no height>"),
+                     getattr(inky, "colour", "<no colour>"),
+                     getattr(inky, "border", "<no border>"))
+    except Exception as exc:
+        logging.warning("Failed to log extended inky properties: %s", exc)
+    
+    # Log prepared image details
+    logging.info("Prepared image diagnostics - size: %s, mode: %s, format: %s, filename: %s",
+                 prepared_image.size,
+                 prepared_image.mode,
+                 getattr(prepared_image, "format", "<no format>"),
+                 image_path)
+    
     try:
         try:
+            logging.info("Calling inky.set_image() with saturation=%s", saturation)
             inky.set_image(prepared_image, saturation=saturation)
+            logging.info("inky.set_image() completed successfully")
         except TypeError:
+            logging.info("Calling inky.set_image() without saturation parameter (TypeError fallback)")
             inky.set_image(prepared_image)
-        inky.show()
+            logging.info("inky.set_image() completed successfully (no saturation)")
+        
+        # Defensive exception handling around show() (may not catch hardware crashes)
+        try:
+            logging.info("About to call inky.show() - THIS IS THE LAST LOG BEFORE POTENTIAL CRASH")
+            inky.show()
+            logging.info("SUCCESS: inky.show() completed without crash")
+        except Exception as exc:
+            logging.exception("CAUGHT EXCEPTION in inky.show(): %s (type: %s)", exc, type(exc).__name__)
+            raise
+        
         logging.info("Displayed image on Inky: %s", image_path)
         
         # Track the currently displayed image and its source path so other
@@ -352,12 +388,13 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
             )
             logging.info("Processing result for UID %s: %s", uid, res)
 
+            prepared_image = None
+            original_image = None
+            image_path = None
+
             if res.get("ok"):
                 # Step 1: Prepare the image for display (but don't show it yet)
                 preview_data = None
-                prepared_image = None
-                original_image = None
-                image_path = None
                 image_preparation_failure_message = ""
                 warnings = []
                 try:
@@ -372,7 +409,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     image_preparation_failure_message = f"Failed to prepare image for UID {uid} with exception:\n{traceback.format_exc()}"
                     logging.exception(image_preparation_failure_message)
 
-                # Step 2: Send success/failure reply with preview before displaying
+                # Step 2A: Send success/failure reply with preview before displaying
                 try:
                     if preview_data:
                         # Build warning HTML if there are warnings
@@ -402,15 +439,8 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     logging.info("Sent success reply for UID %s to %s", uid, from_addr)
                 except Exception:
                     logging.exception("Failed to send success reply for UID %s to %s", uid, from_addr)
-                
-                # Step 3: Now display the image on the screen
-                try:
-                    if prepared_image and image_path:
-                        display_image(inky, prepared_image, image_path, original_image)
-                        logging.info("Displayed image for UID %s: %s", uid, image_path)
-                except Exception:
-                    logging.exception("Failed to display image for UID %s", uid)
             else:
+                # Step 2B: Send failure reply
                 try:
                     error_code = res.get('reason')
                     error_message = get_user_friendly_error(error_code)
@@ -423,6 +453,14 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
                     logging.info("Sent failure reply for UID %s to %s (reason=%s)", uid, from_addr, res.get('reason'))
                 except Exception:
                     logging.exception("Failed to send error reply for UID %s", uid)
+
+            # Step 3: Now display the image on the screen
+            try:
+                if prepared_image and image_path:
+                    display_image(inky, prepared_image, image_path, original_image)
+                    logging.info("Displayed image for UID %s: %s", uid, image_path)
+            except Exception:
+                logging.exception("Failed to display image for UID %s", uid)
 
             # Cleanup
             try:
