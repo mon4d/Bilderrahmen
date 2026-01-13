@@ -86,6 +86,67 @@ def _resize_and_crop(image: Image.Image, target_size: tuple) -> Image.Image:
     return resized.crop((left, top, right, bottom))
 
 
+def _apply_exif_orientation(image: Image.Image) -> tuple[Image.Image, bool]:
+    """Apply EXIF orientation transformation to an image.
+    
+    Reads only the orientation tag (274) and applies the appropriate rotation/flip,
+    ignoring potentially corrupt size metadata that can cause exceptions.
+    
+    Args:
+        image: PIL Image to orient
+        
+    Returns:
+        Tuple of (oriented_image, exif_failed)
+        - oriented_image: The transformed image (or original if no orientation data)
+        - exif_failed: True if EXIF orientation could not be applied
+    """
+    try:
+        # Try to get EXIF data
+        exif = image.getexif()
+        if exif is None:
+            logging.debug("No EXIF data found in image")
+            return image, False
+        
+        # EXIF orientation tag is 274 (0x0112)
+        orientation = exif.get(274)
+        if orientation is None:
+            logging.debug("No EXIF orientation tag found")
+            return image, False
+        
+        logging.debug("EXIF orientation tag detected: %d", orientation)
+        
+        # Map EXIF orientation values to PIL transpose operations
+        # Reference: https://exif.org/Exif2-2.PDF (page 37)
+        orientation_transforms = {
+            1: None,  # Normal - no transformation needed
+            2: Image.FLIP_LEFT_RIGHT,  # Mirrored horizontally
+            3: Image.ROTATE_180,  # Rotated 180°
+            4: Image.FLIP_TOP_BOTTOM,  # Mirrored vertically
+            5: Image.TRANSPOSE,  # Mirrored horizontally + rotated 270° CCW
+            6: Image.ROTATE_270,  # Rotated 90° CW (270° CCW)
+            7: Image.TRANSVERSE,  # Mirrored horizontally + rotated 90° CCW
+            8: Image.ROTATE_90,  # Rotated 270° CW (90° CCW)
+        }
+        
+        transform = orientation_transforms.get(orientation)
+        if transform is None:
+            if orientation == 1:
+                logging.debug("Image has normal orientation, no transformation needed")
+                return image, False
+            else:
+                logging.warning("Unknown EXIF orientation value: %d", orientation)
+                return image, True
+        
+        # Apply the transformation
+        oriented_image = image.transpose(transform)
+        logging.debug("Applied EXIF orientation transformation: %d", orientation)
+        return oriented_image, False
+        
+    except Exception as exc:
+        logging.warning("Failed to read or apply EXIF orientation: %s", exc)
+        return image, True
+
+
 def prepare_image_for_display(inky, image_path: str):
     """Prepare an image for display: load, orient, resize, and create preview data.
     
@@ -105,19 +166,8 @@ def prepare_image_for_display(inky, image_path: str):
         warnings_list = []
         image = Image.open(image_path)
         
-        # Apply EXIF orientation with validation
-        exif_failed = False
-        try:
-            oriented_image = ImageOps.exif_transpose(image)
-            # Validate that transpose didn't produce invalid dimensions
-            if oriented_image.size[0] == 0 or oriented_image.size[1] == 0:
-                logging.warning("EXIF transpose produced invalid dimensions, using original image")
-                oriented_image = image
-                exif_failed = True
-        except Exception as exc:
-            logging.warning("EXIF transpose failed: %s, using original image", exc)
-            oriented_image = image
-            exif_failed = True
+        # Apply EXIF orientation using custom logic that ignores corrupt size metadata
+        oriented_image, exif_failed = _apply_exif_orientation(image)
         
         if exif_failed:
             warnings_list.append("EXIF orientation data could not be applied. Please check the preview to verify your image displays correctly.")
@@ -164,10 +214,10 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
         return False
     
     # Log detailed inky display state for crash diagnosis
-    logging.info("Inky display diagnostics - name: %s, resolution: %s, type: %s", 
+    logging.info("Inky display diagnostics - name: %s, resolution: %s, module: %s", 
                  getattr(inky, "name", "<unknown>"),
                  getattr(inky, "resolution", "<no resolution>"),
-                 type(inky).__name__)
+                 type(inky).__module__)
     
     # Log additional inky properties that might indicate initialization issues
     try:
