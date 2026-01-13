@@ -30,14 +30,19 @@ def init_display(ask_user: bool = False):
     try:
         from inky.auto import auto
 
-        inky = auto()
-        display_name = getattr(inky, "name", "<unknown>")
-        logging.info("Initialized Inky display: %s", display_name)
+        inky = auto(verbose=True)
         
-        # Reject displays that failed to initialize properly
-        if display_name == "<unknown>":
-            logging.error("Display initialization failed - name is '<unknown>'. Hardware may not be properly connected or detected.")
+        # Validate that essential attributes exist and are valid
+        if not hasattr(inky, 'resolution') or not hasattr(inky, 'colour'):
+            logging.error("Display initialization failed - missing essential attributes")
             return None
+        
+        if inky.resolution is None or len(inky.resolution) != 2:
+            logging.error("Display initialization failed - invalid resolution: %s", inky.resolution)
+            return None
+        
+        logging.info("Initialized Inky display - resolution: %s, colour: %s, module: %s", 
+                     inky.resolution, inky.colour, type(inky).__module__)
         
         return inky
     except Exception as exc:
