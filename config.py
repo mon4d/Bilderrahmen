@@ -28,10 +28,11 @@ DEFAULTS_SMTP = {
 }
 DEFAULTS_APPLICATION = {
     # Application settings
-    "POLL_INTERVAL": "60",
-    "ATTACHMENT_MAX_BYTES": "20971520",
-    "ORIENTATION": "landscape",
     "DEVICE_NAME": "Mein Bilderrahmen",
+    "ORIENTATION": "landscape",
+    "SATURATION": "0.5",
+    "ATTACHMENT_MAX_BYTES": "20971520",
+    "POLL_INTERVAL": "60",
 }
 DEFAULTS_DEVELOPMENT = {
     # Development settings

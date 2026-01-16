@@ -361,6 +361,22 @@ def _find_latest_image(data_dir: str) -> str | None:
     files.sort(key=lambda p: os.path.getmtime(p), reverse=True)
     return files[0]
 
+def get_saturation() -> float:
+    """Get the saturation setting from config, defaulting to 0.5 on error."""
+    try:
+        saturation_config_value = config.read_setting("SATURATION", "0.5")
+        # Convert config value to float and check for value error
+        try:
+            saturation_float = float(saturation_config_value)
+        except ValueError:
+            logging.warning("Invalid SATURATION config value: %s; defaulting to 0.5", saturation_config_value)
+            return 0.5
+        saturation_clamped = max(0.0, min(1.0, saturation_float))
+        logging.debug("Using SATURATION value: %f", saturation_clamped)
+        return saturation_clamped
+    except Exception:
+        logging.exception("Error reading SATURATION config; defaulting to 0.5")
+        return 0.5
 
 def toggle_orientation_and_apply(inky) -> None:
     """Toggle orientation setting and reapply the current image rotated."""
@@ -376,7 +392,7 @@ def toggle_orientation_and_apply(inky) -> None:
             try:
                 prepared, _, orig, error, _ = prepare_image_for_display(inky, current_image_path)
                 if prepared:
-                    display_image(inky, prepared, current_image_path, orig)
+                    display_image(inky, prepared, current_image_path, orig, get_saturation())
                     logging.info("Reapplied current_image after orientation toggle")
                     return
                 elif error:
@@ -390,7 +406,7 @@ def toggle_orientation_and_apply(inky) -> None:
             logging.info("No current image available; showing latest: %s", latest)
             prepared, _, orig, error, _ = prepare_image_for_display(inky, latest)
             if prepared:
-                display_image(inky, prepared, latest, orig)
+                display_image(inky, prepared, latest, orig, get_saturation())
                 logging.info("Applied latest image after orientation toggle")
                 return
             elif error:
@@ -605,7 +621,7 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
             # Step 4: Now display the image on the screen
             try:
                 if prepared_image and image_path:
-                    display_image(inky, prepared_image, image_path, original_image)
+                    display_image(inky, prepared_image, image_path, original_image, get_saturation())
                     logging.info("Displayed image for UID %s: %s", uid, image_path)
             except Exception:
                 logging.exception("Failed to display image for UID %s", uid)
