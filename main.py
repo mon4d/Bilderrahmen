@@ -9,7 +9,8 @@ import glob
 import logging
 from logging.handlers import TimedRotatingFileHandler
 import os
-import tempfile
+import socket
+import subprocess
 import threading
 import time
 import traceback
@@ -23,6 +24,88 @@ from imap_client import IMAPClientWrapper
 from processor import process_message_bytes
 from smtp_sender import send_reply, render_template, get_user_friendly_error
 from storage import UIDStore
+
+REBOOT_MIN_UPTIME_SECONDS = 60 * 60
+
+
+def get_system_uptime_seconds() -> float:
+    """Return system uptime in seconds.
+
+    On Raspberry Pi/Linux, `/proc/uptime` is the most direct. We fall back to
+    boot/monotonic clocks for non-Linux environments.
+    """
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            return float(f.read().split()[0])
+    except Exception:
+        # This shouldn't happen on the target platform, but just in case it does
+        # we assume the system has been up long enough to allow reboots.
+        return REBOOT_MIN_UPTIME_SECONDS + 1.0
+
+
+def perform_reboot(reason: str) -> None:
+    """Best-effort system reboot.
+
+    Runs as root in this deployment, so we can directly invoke reboot.
+    """
+    try:
+        logging.error("Rebooting system due to: %s", reason)
+        subprocess.run(["/usr/bin/systemctl", "reboot", "--no-block"], check=False)
+    except Exception:
+        logging.exception("systemctl reboot failed")
+
+
+def _nameservers_from_resolv_conf(path: str = "/etc/resolv.conf") -> list[str]:
+    """Best-effort parsing of system DNS servers.
+
+    Returns a list of IP strings (may be empty).
+    """
+    servers: list[str] = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split()
+                if len(parts) >= 2 and parts[0].lower() == "nameserver":
+                    servers.append(parts[1])
+    except Exception:
+        return []
+    return servers
+
+
+def check_internet_connectivity(timeout_seconds: float = 5.0) -> bool:
+    """Return True if we can reach a DNS server, else False.
+
+    This is a lightweight connectivity check: attempt a TCP connection to a
+    nameserver on port 53. If at least one server is reachable within
+    `timeout_seconds`, we consider the internet connection up.
+    """
+    # Prefer the system's configured DNS (common in LAN setups), then fall back
+    # to well-known public resolvers.
+    candidate_servers = _nameservers_from_resolv_conf() + [
+        "1.1.1.1",  # Cloudflare
+        "8.8.8.8",  # Google
+        "9.9.9.9",  # Quad9
+    ]
+
+    # De-duplicate while preserving order
+    seen: set[str] = set()
+    servers: list[str] = []
+    for ip in candidate_servers:
+        if ip and ip not in seen:
+            seen.add(ip)
+            servers.append(ip)
+
+    for ip in servers:
+        try:
+            with socket.create_connection((ip, 53), timeout=timeout_seconds):
+                return True
+        except OSError:
+            continue
+
+    return False
 
 
 def init_display(ask_user: bool = False):
@@ -213,21 +296,11 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
         logging.warning("No prepared image provided; cannot display %s", image_path)
         return False
     
-    # Log detailed inky display state for crash diagnosis
-    logging.info("Inky display diagnostics - name: %s, resolution: %s, module: %s", 
-                 getattr(inky, "name", "<unknown>"),
+    # Log inky display state for crash diagnosis
+    logging.info("Inky display diagnostics - resolution: %s, colour: %s, module: %s", 
                  getattr(inky, "resolution", "<no resolution>"),
+                 getattr(inky, "colour", "<no colour>"),
                  type(inky).__module__)
-    
-    # Log additional inky properties that might indicate initialization issues
-    try:
-        logging.info("Inky display extended properties - width: %s, height: %s, colour: %s, border: %s",
-                     getattr(inky, "width", "<no width>"),
-                     getattr(inky, "height", "<no height>"),
-                     getattr(inky, "colour", "<no colour>"),
-                     getattr(inky, "border", "<no border>"))
-    except Exception as exc:
-        logging.warning("Failed to log extended inky properties: %s", exc)
     
     # Log prepared image details
     logging.info("Prepared image diagnostics - size: %s, mode: %s, format: %s, filename: %s",
@@ -248,9 +321,9 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
         
         # Defensive exception handling around show() (may not catch hardware crashes)
         try:
-            logging.info("About to call inky.show() - THIS IS THE LAST LOG BEFORE POTENTIAL CRASH")
+            logging.info("About to call inky.show()")
             inky.show()
-            logging.info("SUCCESS: inky.show() completed without crash")
+            logging.info("inky.show() completed successfully")
         except Exception as exc:
             logging.exception("CAUGHT EXCEPTION in inky.show(): %s (type: %s)", exc, type(exc).__name__)
             raise
@@ -591,32 +664,57 @@ def main() -> None:
         # Process existing messages
         last_uid = process_uids(uids, last_uid, imap, inky, store)
         
-        # Main loop: wait for new messages using IDLE
+        # Main loop with fallback
         while True:
             try:
-                # Wait for new mail notification (15 minute timeout)
-                has_new_mail = imap.idle_wait(timeout=900)
-                
-                if not has_new_mail:
-                    # Timeout reached - check for new mails manually once, then restart IDLE to keep connection alive
-                    logging.debug("IDLE timeout, restarting...")
-                
-                # New mail arrived - fetch and process
-                logging.info("New mail notification received")
-                uids = imap.get_all_messages_uids()
-                logging.info("Found %d messages after IDLE notification", len(uids))
-            except Exception as exc:
-                logging.exception("IDLE/search failed: %s", exc)
-                # Fall back to polling on error
-                time.sleep(config.read_setting_int("POLL_INTERVAL", 60))
+                # Actual main loop
                 try:
+                    # Wait for new mail notification (15 minute timeout)
+                    has_new_mail = imap.idle_wait(timeout=900)
+                    
+                    if has_new_mail:
+                        # New mail arrived
+                        logging.debug("IDLE reported new mail available")
+                    else:
+                        # Timeout reached - check for new mails manually once, then restart IDLE to keep connection alive
+                        logging.debug("IDLE timeout, checking for new mail manually...")
+                    
                     uids = imap.get_all_messages_uids()
-                except Exception:
-                    logging.exception("Fallback search also failed")
-                    continue
+                    logging.info("Found %d messages", len(uids))
+                    time.sleep(1)  # brief pause before the next check
+                except Exception as exc:
+                    logging.exception("IDLE/search failed: %s", exc)
+                    # Fall back to polling on error
+                    time.sleep(config.read_setting_int("POLL_INTERVAL", 60))
+                    try:
+                        uids = imap.get_all_messages_uids()
+                    except Exception:
+                        logging.exception("Fallback search also failed")
+                        continue
 
-            # Process new messages
-            last_uid = process_uids(uids, last_uid, imap, inky, store)
+                # Process new messages
+                last_uid = process_uids(uids, last_uid, imap, inky, store)
+
+                # Check if we should consider rebooting due to connection issues
+                try:
+                    if not check_internet_connectivity():
+                        logging.exception("No internet connectivity detected")
+                        try:
+                            uptime = get_system_uptime_seconds()
+                            if uptime < REBOOT_MIN_UPTIME_SECONDS:
+                                logging.warning("Reboot suppressed (system uptime less than %s); continuing without reboot", REBOOT_MIN_UPTIME_SECONDS)
+                            else:
+                                perform_reboot("Unable to connect to IMAP server")
+                        except Exception:
+                            # This is highly unlikely, but just in case so we will find something in the logs...
+                            logging.exception("Tried to check for reboot but failed")
+                except Exception:
+                    logging.exception("Failed to check internet connectivity for reboot logic")
+
+            except Exception:
+                # Catch-all with sleep to prevent main loop from exiting
+                logging.exception("Error in main loop")
+                time.sleep(config.read_setting_int("POLL_INTERVAL", 60))
 
     finally:
         imap.logout()
