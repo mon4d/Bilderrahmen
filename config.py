@@ -30,7 +30,7 @@ DEFAULTS_APPLICATION = {
     # Application settings
     "DEVICE_NAME": "Mein Bilderrahmen",
     "ORIENTATION": "landscape",
-    "SATURATION": "0.5",
+    "SATURATION": "0.8",
     "ATTACHMENT_MAX_BYTES": "20971520",
     "POLL_INTERVAL": "60",
 }
