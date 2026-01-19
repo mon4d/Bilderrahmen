@@ -112,7 +112,7 @@ class IMAPClientWrapper:
             logger.info("No trash_mailbox configured; skipping empty_trash")
             return
         try:
-            self.client.select_folder(f"INBOX.{self.trash_mailbox}")
+            self.client.select_folder(f"{self.trash_mailbox}")
             self.client.expunge()
             logger.info("Emptied trash mailbox %s", self.trash_mailbox)
         except Exception as exc:
