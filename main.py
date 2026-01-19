@@ -684,24 +684,25 @@ def main() -> None:
         while True:
             try:
                 # Actual main loop
+                # Fall back to polling on error or IDLE unsupported
+                pollinterval_conf = config.read_setting_int("POLL_INTERVAL", 60)
                 try:
                     # Wait for new mail notification (15 minute timeout)
-                    has_new_mail = imap.idle_wait(timeout=900)
+                    has_new_mail = imap.idle_wait(timeout=900, pollintervall=pollinterval_conf)
                     
                     if has_new_mail:
                         # New mail arrived
                         logging.debug("IDLE reported new mail available")
                     else:
                         # Timeout reached - check for new mails manually once, then restart IDLE to keep connection alive
-                        logging.debug("IDLE timeout, checking for new mail manually...")
+                        logging.debug("IDLE timeout or polling interval reached, checking for new mail manually...")
                     
                     uids = imap.get_all_messages_uids()
                     logging.info("Found %d messages", len(uids))
                     time.sleep(1)  # brief pause before the next check
                 except Exception as exc:
                     logging.exception("IDLE/search failed: %s", exc)
-                    # Fall back to polling on error
-                    time.sleep(config.read_setting_int("POLL_INTERVAL", 60))
+                    time.sleep(pollinterval_conf)
                     try:
                         uids = imap.get_all_messages_uids()
                     except Exception:

@@ -7,6 +7,7 @@ message retrieval, and IMAP IDLE support.
 import imaplib
 import logging
 import sys
+import time
 from typing import List, Optional
 
 # Workaround for Python 3.14+ where imaplib.IMAP4.file is a read-only property.
@@ -124,7 +125,7 @@ class IMAPClientWrapper:
                 # best-effort restore
                 logger.debug("Failed to restore mailbox selection: %s", exc)
 
-    def idle_wait(self, timeout: int = 900) -> bool:
+    def idle_wait(self, timeout: int = 900, pollintervall: int = 300) -> bool:
         """Wait for new messages using IMAP IDLE. Returns True if new mail arrived.
         
         Timeout should be < 29 minutes (1740s) as servers disconnect after 30min.
@@ -138,25 +139,31 @@ class IMAPClientWrapper:
         try:
             # Check if server supports IDLE
             if b'IDLE' not in self.client.capabilities():
-                logger.warning("IMAP server does not support IDLE extension")
+                logger.warning("IMAP server does not support IDLE extension, falling back to polling every %ds", pollintervall)
+                time.sleep(pollintervall)
                 return False
-            
+
             logger.debug("Starting IDLE, waiting for new messages (timeout: %ds)...", timeout)
             self.client.idle()
-            
-            # Wait for notification or timeout
-            responses = self.client.idle_check(timeout=timeout)
-            self.client.idle_done()
-            
-            # Check if any response indicates new mail
-            for response in responses:
-                if b'EXISTS' in response or b'RECENT' in response:
-                    logger.info("IDLE notification: new mail arrived")
-                    return True
-            
-            logger.debug("IDLE timeout reached, no new mail")
-            return False
-            
+
+            end_time = time.monotonic() + timeout
+            while True:
+                remaining = end_time - time.monotonic()
+                if remaining <= 0:
+                    self.client.idle_done()
+                    logger.debug("IDLE timeout reached, no new mail")
+                    return False
+
+                # Wait for notification or timeout slice
+                responses = self.client.idle_check(timeout=int(remaining))
+
+                # Check if any response indicates new mail
+                for response in responses or []:
+                    if b'EXISTS' in response or b'RECENT' in response:
+                        self.client.idle_done()
+                        logger.info("IDLE notification: new mail arrived")
+                        return True
+
         except Exception as e:
             logger.exception("IDLE failed: %s", e)
             # Try to clean up IDLE state
