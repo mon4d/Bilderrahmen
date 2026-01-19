@@ -328,8 +328,6 @@ def display_image(inky, prepared_image: Image.Image, image_path: str, original_i
             logging.exception("CAUGHT EXCEPTION in inky.show(): %s (type: %s)", exc, type(exc).__name__)
             raise
         
-        logging.info("Displayed image on Inky: %s", image_path)
-        
         # Track the currently displayed image and its source path so other
         # parts of the program can rotate/reapply it when orientation changes.
         try:
@@ -512,6 +510,46 @@ def setup_logging(level: str) -> None:
             logging.warning("Failed to enable file logging: %s", exc)
 
 
+# Temporary tool to fix broken git update in startup script
+def run_git_update(repo_path: str) -> None:
+    """Best-effort git update for the repo at `repo_path`.
+
+    Adds the path to git's safe.directory list to bypass dubious ownership
+    warnings, then performs a fast-forward pull. Failures are logged and the
+    program continues.
+    """
+    try:
+        if not os.path.isdir(repo_path):
+            logging.warning("Git update skipped; repo path not found: %s", repo_path)
+            return
+
+        logging.info("Updating git repo at %s", repo_path)
+
+        safe_cmd = ["git", "config", "--global", "--add", "safe.directory", repo_path]
+        safe_res = subprocess.run(safe_cmd, capture_output=True, text=True, check=False)
+        if safe_res.returncode != 0:
+            logging.warning(
+                "Failed to mark repo as safe (code %s): %s%s",
+                safe_res.returncode,
+                safe_res.stdout or "",
+                safe_res.stderr or "",
+            )
+
+        pull_cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
+        pull_res = subprocess.run(pull_cmd, capture_output=True, text=True, check=False)
+        if pull_res.returncode != 0:
+            logging.warning(
+                "Git pull failed (code %s): %s%s",
+                pull_res.returncode,
+                pull_res.stdout or "",
+                pull_res.stderr or "",
+            )
+        else:
+            logging.info("Git pull succeeded: %s", (pull_res.stdout or "").strip())
+    except Exception:
+        logging.exception("Failed to update repo at %s", repo_path)
+
+
 def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, store: UIDStore) -> int:
     """Process a list of message UIDs: fetch, process attachments, send replies, and display images."""
     for uid in sorted(uids):
@@ -637,6 +675,9 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
 def main() -> None:
     config.load_config()
     setup_logging(config.read_setting("LOG_LEVEL", "INFO"))
+
+    # Temporary git update to fix broken startup script
+    run_git_update("/home/bilderrahmen/HeadlessPI/")
 
     data_dir = config.read_setting("DATA_DIR", "/mnt/usb/data")
     tmp_dir = config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
