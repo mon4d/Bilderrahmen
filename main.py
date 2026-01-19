@@ -525,17 +525,7 @@ def run_git_update(repo_path: str) -> None:
 
         logging.info("Updating git repo at %s", repo_path)
 
-        safe_cmd = ["git", "config", "--global", "--add", "safe.directory", repo_path]
-        safe_res = subprocess.run(safe_cmd, capture_output=True, text=True, check=False)
-        if safe_res.returncode != 0:
-            logging.warning(
-                "Failed to mark repo as safe (code %s): %s%s",
-                safe_res.returncode,
-                safe_res.stdout or "",
-                safe_res.stderr or "",
-            )
-
-        pull_cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
+        pull_cmd = ["git", "-C", repo_path, "-c", f"safe.directory={repo_path}", "pull", "--ff-only"]
         pull_res = subprocess.run(pull_cmd, capture_output=True, text=True, check=False)
         if pull_res.returncode != 0:
             logging.warning(
