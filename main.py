@@ -55,6 +55,47 @@ def perform_reboot(reason: str) -> None:
         logging.exception("systemctl reboot failed")
 
 
+# Temp!!
+def run_overlayfs_once() -> None:
+    """Run `raspi-config nonint do_overlayfs 1` exactly once.
+
+    Uses an atomic lock and a persistent marker file under `config.TMP_DIR`
+    to ensure the command only runs a single time across reboots.
+    """
+    try:
+        tmp_dir = getattr(config, "TMP_DIR", "/mnt/usb")
+        marker = os.path.join(tmp_dir, ".fixed_overlayfs")
+
+        # Quick exit if already applied
+        if os.path.exists(marker):
+            logging.info("OverlayFS marker present at %s; skipping setup", marker)
+            return
+
+        # Must be root to run raspi-config non-interactively
+        if getattr(os, "geteuid", lambda: 1)() != 0:
+            logging.warning("Not running as root; cannot run raspi-config. Skipping overlayfs setup.")
+            return
+
+        with open(marker, "w", encoding="utf-8") as f:
+            f.write("ok\n")
+            f.flush()
+            os.fsync(f.fileno())
+        logging.info("Created one-time overlayfs marker at %s", marker)
+
+        # Locate raspi-config
+        rc_path = "/usr/bin/raspi-config"
+        cmd = [rc_path, "nonint", "do_overlayfs", "1"]
+        logging.info("Running one-time overlayfs command: %s", " ".join(cmd))
+        try:
+            subprocess.run(cmd, capture_output=True, text=True)
+        except FileNotFoundError:
+            logging.error("raspi-config not found at %s; skipping", rc_path)
+            return
+
+    except Exception:
+        logging.exception("One-time overlayfs setup failed")
+
+
 def _nameservers_from_resolv_conf(path: str = "/etc/resolv.conf") -> list[str]:
     """Best-effort parsing of system DNS servers.
 
@@ -705,6 +746,12 @@ def main() -> None:
     tmp_dir = config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
     os.makedirs(data_dir, exist_ok=True)
     os.makedirs(tmp_dir, exist_ok=True)
+
+    # One-time system configuration: enable OverlayFS if not already done
+    try:
+        run_overlayfs_once()
+    except Exception:
+        logging.exception("run_overlayfs_once() execution failed")
 
     store = UIDStore(os.path.join(data_dir, "uid_state.json"))
     last_uid = store.get_last_uid() or 0
