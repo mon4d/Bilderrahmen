@@ -423,10 +423,27 @@ def _monitor_buttons_thread(inky) -> None:
 
         SW_A = 5
         SW_B = 6
-        SW_C = 16
+        # Default for most devices
+        SW_C_DEFAULT = 16
+        # 13.3" Inky (module EL133UF1) needs GPIO25
+        SW_C_13INCH = 25
         SW_D = 24
+
+        # Attempt to detect the inky module string to choose the correct SW_C
+        detected_str = "unknown"
+        try:
+            detected_str = type(inky).__module__
+            if "EL133UF1" in detected_str.upper():
+                SW_C = SW_C_13INCH
+            else:
+                SW_C = SW_C_DEFAULT
+        except Exception:
+            SW_C = SW_C_DEFAULT
+
         BUTTONS = [SW_A, SW_B, SW_C, SW_D]
         LABELS = ["A", "B", "C", "D"]
+
+        logging.info("Button GPIO mapping: A=%d B=%d C=%d D=%d (detected_inky_module=%s)", SW_A, SW_B, SW_C, SW_D, detected_str)
 
         INPUT = gpiod.LineSettings(direction=Direction.INPUT, bias=Bias.PULL_UP, edge_detection=Edge.FALLING)
 
