@@ -26,7 +26,7 @@ from smtp_sender import send_reply, render_template, get_user_friendly_error
 from storage import UIDStore
 
 REBOOT_MIN_UPTIME_SECONDS = 60 * 60
-
+VERSION = "0.5"
 
 def get_system_uptime_seconds() -> float:
     """Return system uptime in seconds.
@@ -535,7 +535,7 @@ def run_git_update(repo_path: str) -> None:
                 chown_res.stderr or "",
             )
         else:
-            logging.debug("Fixed repository ownership to root:root")
+            logging.info("Fixed repository ownership to root:root")
 
         # Perform git pull
         pull_cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
@@ -678,6 +678,8 @@ def process_uids(uids: list[int], last_uid: int, imap: IMAPClientWrapper, inky, 
 def main() -> None:
     config.load_config()
     setup_logging(config.read_setting("LOG_LEVEL", "INFO"))
+
+    logging.info("Starting Bilderrahmen main loop with version %s", VERSION)
 
     # Temporary git update to fix broken startup script
     run_git_update("/home/bilderrahmen/HeadlessPI/")
