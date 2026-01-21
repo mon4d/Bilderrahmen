@@ -86,11 +86,10 @@ def run_overlayfs_once() -> None:
         rc_path = "/usr/bin/raspi-config"
         cmd = [rc_path, "nonint", "do_overlayfs", "1"]
         logging.info("Running one-time overlayfs command: %s", " ".join(cmd))
-        try:
-            subprocess.run(cmd, capture_output=True, text=True)
-        except FileNotFoundError:
-            logging.info("raspi-config not found at %s; skipping", rc_path)
-            return
+        subprocess.run(cmd, capture_output=True, text=True)
+        #reboot
+        perform_reboot("OverlayFS setup completed")
+        time.sleep(10)  # Give system time to reboot
 
     except Exception:
         logging.exception("One-time overlayfs setup failed")
