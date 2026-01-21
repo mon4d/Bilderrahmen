@@ -63,7 +63,7 @@ def run_overlayfs_once() -> None:
     to ensure the command only runs a single time across reboots.
     """
     try:
-        tmp_dir = getattr(config, "TMP_DIR", "/mnt/usb")
+        tmp_dir = config.read_setting("TMP_DIR", "/mnt/usb/system/tmp")
         marker = os.path.join(tmp_dir, ".fixed_overlayfs")
 
         # Quick exit if already applied
@@ -89,7 +89,7 @@ def run_overlayfs_once() -> None:
         try:
             subprocess.run(cmd, capture_output=True, text=True)
         except FileNotFoundError:
-            logging.error("raspi-config not found at %s; skipping", rc_path)
+            logging.info("raspi-config not found at %s; skipping", rc_path)
             return
 
     except Exception:
