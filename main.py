@@ -514,9 +514,8 @@ def setup_logging(level: str) -> None:
 def run_git_update(repo_path: str) -> None:
     """Best-effort git update for the repo at `repo_path`.
 
-    Adds the path to git's safe.directory list to bypass dubious ownership
-    warnings, then performs a fast-forward pull. Failures are logged and the
-    program continues.
+    Fixes repository ownership to match the running user (root), then performs
+    a fast-forward pull. Failures are logged and the program continues.
     """
     try:
         if not os.path.isdir(repo_path):
@@ -525,7 +524,21 @@ def run_git_update(repo_path: str) -> None:
 
         logging.info("Updating git repo at %s", repo_path)
 
-        pull_cmd = ["git", "-C", repo_path, "-c", f"safe.directory={repo_path}", "pull", "--ff-only"]
+        # Fix ownership to root (since this app runs as root)
+        chown_cmd = ["chown", "-R", "root:root", repo_path]
+        chown_res = subprocess.run(chown_cmd, capture_output=True, text=True, check=False)
+        if chown_res.returncode != 0:
+            logging.warning(
+                "Failed to fix repo ownership (code %s): %s%s",
+                chown_res.returncode,
+                chown_res.stdout or "",
+                chown_res.stderr or "",
+            )
+        else:
+            logging.debug("Fixed repository ownership to root:root")
+
+        # Perform git pull
+        pull_cmd = ["git", "-C", repo_path, "pull", "--ff-only"]
         pull_res = subprocess.run(pull_cmd, capture_output=True, text=True, check=False)
         if pull_res.returncode != 0:
             logging.warning(
